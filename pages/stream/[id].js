@@ -171,7 +171,7 @@ export default function StreamPage() {
     socket.on('viewer_count', count => setViewers(count));
     socket.on('balance_update', ({ balance }) => setBalanceDirect(balance));
     socket.on('tip_error', ({ error }) => { setTipError(error); setTipSending(false); });
-    socket.on('stream_offline', () => setStream(prev => prev ? { ...prev, is_live: false } : prev));
+    socket.on('stream_offline', () => router.push('/'));
 
     return () => socket.disconnect();
   }, [id, user, setBalanceDirect]);
