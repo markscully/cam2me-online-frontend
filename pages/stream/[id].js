@@ -11,9 +11,7 @@ const TIP_PRESETS = [10, 25, 50, 100];
 function BroadcasterView({ streamId, onEnd }) {
   const [room, setRoom] = useState(null);
   const [status, setStatus] = useState('connecting');
-  const [facingMode, setFacingMode] = useState('user'); // 'user' = frontale, 'environment' = posteriore
   const videoRef = useRef(null);
-  const currentVideoTrack = useRef(null);
 
   useEffect(() => {
     let lkRoom;
@@ -31,16 +29,11 @@ function BroadcasterView({ streamId, onEnd }) {
 
         await lkRoom.connect(livekitUrl, token);
 
-        const tracks = await createLocalTracks({
-          audio: true,
-          video: { facingMode: 'user' }
-        });
-
+        const tracks = await createLocalTracks({ audio: true, video: true });
         for (const track of tracks) {
           await lkRoom.localParticipant.publishTrack(track);
-          if (track.kind === 'video') {
-            currentVideoTrack.current = track;
-            if (videoRef.current) track.attach(videoRef.current);
+          if (track.kind === 'video' && videoRef.current) {
+            track.attach(videoRef.current);
           }
         }
         setStatus('live');
@@ -57,32 +50,6 @@ function BroadcasterView({ streamId, onEnd }) {
     };
   }, [streamId]);
 
-  // Cambio camera frontale/posteriore
-  async function switchCamera() {
-    if (!room || !currentVideoTrack.current) return;
-    try {
-      const newFacing = facingMode === 'user' ? 'environment' : 'user';
-      const { createLocalVideoTrack } = await import('livekit-client');
-
-      // Ferma il track attuale
-      await room.localParticipant.unpublishTrack(currentVideoTrack.current.mediaStreamTrack);
-      currentVideoTrack.current.stop();
-
-      // Crea nuovo track con la camera opposta
-      const newTrack = await createLocalVideoTrack({ facingMode: newFacing });
-      await room.localParticipant.publishTrack(newTrack);
-
-      if (videoRef.current) {
-        newTrack.attach(videoRef.current);
-      }
-
-      currentVideoTrack.current = newTrack;
-      setFacingMode(newFacing);
-    } catch (err) {
-      console.error('[switchCamera]', err);
-    }
-  }
-
   async function handleEnd() {
     if (room) room.disconnect();
     await api.endStream(streamId);
@@ -91,102 +58,211 @@ function BroadcasterView({ streamId, onEnd }) {
 
   return (
     <div>
-      <div style={{
-        position: 'relative',
-        width: '100%',
-        maxWidth: 600,
-        margin: '0 auto',
-        background: '#000',
-        borderRadius: 8,
-        overflow: 'hidden'
-      }}>
-        <video
-          ref={videoRef}
-          autoPlay
-          muted
-          playsInline
-          style={{
-            width: '100%',
-            height: 'auto',
-            display: 'block',
-            // Adatta l'aspect ratio al video reale (verticale su mobile)
-            objectFit: 'contain',
-            maxHeight: '70vh'
-          }}
-        />
-
-        {status === 'connecting' && (
-          <div style={{
-            position: 'absolute', top: '50%', left: '50%',
-            transform: 'translate(-50%,-50%)',
-            color: '#fff', fontSize: 14
-          }}>
-            Connessione in corso...
-          </div>
-        )}
-
-        {status === 'error' && (
-          <div style={{
-            position: 'absolute', top: '50%', left: '50%',
-            transform: 'translate(-50%,-50%)',
-            color: '#ff6b6b', fontSize: 14, textAlign: 'center', padding: '1rem'
-          }}>
-            Errore connessione LiveKit.<br />
-            Controlla i permessi della fotocamera.
-          </div>
-        )}
-
-        {/* Badge LIVE */}
+      <video
+        ref={videoRef}
+        autoPlay
+        muted
+        playsInline
+        style={{ width: '100%', borderRadius: 8, background: '#000', aspectRatio: '16/9' }}
+      />
+      <div style={{ marginTop: '0.5rem', display: 'flex', alignItems: 'center', gap: '1rem' }}>
+        {status === 'live' && <span style={{ color: '#4caf50' }}>● LIVE</span>}
+        {status === 'connecting' && <span style={{ color: '#ffb74d' }}>Connessione...</span>}
+        {status === 'error' && <span className="error-text">Errore connessione LiveKit</span>}
         {status === 'live' && (
-          <div style={{
-            position: 'absolute', top: 10, left: 10,
-            background: '#e53935', color: '#fff',
-            fontSize: 11, fontWeight: 700,
-            padding: '3px 8px', borderRadius: 4
-          }}>
-            ● LIVE
+          <button onClick={handleEnd} style={{ background: '#c62828' }}>Termina stream</button>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// Componente viewer LiveKit
+function ViewerPlayer({ streamId }) {
+ const [room, setRoom] = useState(null);
+  const [status, setStatus] = useState('connecting');
+  const [facingMode, setFacingMode] = useState('user'); // 'user' = frontale, 'environment' = posteriore
+  const videoRef = useRef(null);
+  const currentVideoTrack = useRef(null);
+  useEffect(() => {
+    let lkRoom;
+
+    async function start() {
+      try {
+        const { Room } = await import('livekit-client');
+        const { token, livekitUrl } = await api.getViewerToken(streamId);
+
+        lkRoom = new Room();
+
+        lkRoom.on('trackSubscribed', (track, pub, participant) => {
+          if (track.kind === 'video' && videoRef.current) {
+            track.attach(videoRef.current);
+            setStatus('playing');
+          }
+        });
+
+        lkRoom.on('disconnected', () => setStatus('offline'));
+        lkRoom.on('connected', () => setStatus('waiting'));
+
+        await lkRoom.connect(livekitUrl, token);
+      } catch (err) {
+        console.error('[LiveKit viewer]', err);
+        setStatus('error');
+      }
+    }
+
+    start();
+    return () => { if (lkRoom) lkRoom.disconnect(); };
+  }, [streamId]);
+
+  return (
+    <div>
+      <video
+        ref={videoRef}
+        autoPlay
+        playsInline
+        controls
+        style={{ width: '100%', borderRadius: 8, background: '#000', aspectRatio: '16/9' }}
+      />
+      {status === 'connecting' && <p style={{ color: '#ffb74d', fontSize: 13 }}>Connessione allo stream...</p>}
+      {status === 'waiting' && <p style={{ color: '#888', fontSize: 13 }}>In attesa del broadcaster...</p>}
+      {status === 'offline' && <p style={{ color: '#888', fontSize: 13 }}>Lo stream è terminato.</p>}
+      {status === 'error' && <p className="error-text" style={{ fontSize: 13 }}>Errore connessione.</p>}
+    </div>
+  );
+}
+
+export default function StreamPage() {
+  const router = useRouter();
+  const { id, broadcaster: isBroadcasterParam } = router.query;
+  const { user, balance, setBalanceDirect } = useAuth();
+
+  const [stream, setStream] = useState(null);
+  const [messages, setMessages] = useState([]);
+  const [input, setInput] = useState('');
+  const [viewers, setViewers] = useState(0);
+  const [error, setError] = useState('');
+  const [tipError, setTipError] = useState('');
+  const [tipSending, setTipSending] = useState(false);
+
+  const socketRef = useRef(null);
+  const messagesEndRef = useRef(null);
+
+  const isBroadcaster = isBroadcasterParam === '1' || (user && stream && stream.broadcaster === user.username);
+
+  useEffect(() => {
+    if (!id) return;
+    api.getStream(id).then(s => { setStream(s); setViewers(s.viewers); }).catch(err => setError(err.message));
+    api.getMessages(id).then(setMessages).catch(() => {});
+
+    const interval = setInterval(() => {
+      api.getStream(id).then(s => setStream(prev => prev ? { ...prev, is_live: s.is_live } : s)).catch(() => {});
+    }, 10000);
+
+    return () => clearInterval(interval);
+  }, [id]);
+
+  useEffect(() => {
+    if (!id || !user) return;
+    const token = localStorage.getItem('token');
+    const socket = io(API_URL, { auth: { token } });
+    socketRef.current = socket;
+
+    socket.on('connect', () => socket.emit('join_stream', id));
+    socket.on('chat_message', msg => setMessages(prev => [...prev, msg]));
+    socket.on('viewer_count', count => setViewers(count));
+    socket.on('balance_update', ({ balance }) => setBalanceDirect(balance));
+    socket.on('tip_error', ({ error }) => { setTipError(error); setTipSending(false); });
+    socket.on('stream_offline', () => router.push('/'));
+
+    return () => socket.disconnect();
+  }, [id, user, setBalanceDirect]);
+
+  useEffect(() => {
+    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, [messages]);
+
+  function sendMessage(e) {
+    e.preventDefault();
+    if (!input.trim() || !socketRef.current) return;
+    socketRef.current.emit('chat_message', { streamId: id, message: input });
+    setInput('');
+  }
+
+  function sendTip(amount) {
+    if (!socketRef.current) return;
+    setTipError('');
+    setTipSending(true);
+    socketRef.current.emit('send_tip', { streamId: id, amount });
+    setTimeout(() => setTipSending(false), 600);
+  }
+
+  if (!stream) return <div><Navbar /><div className="container"><p>Caricamento...</p></div></div>;
+
+  return (
+    <div>
+      <Navbar />
+      <div className="container">
+        {error && <p className="error-text">{error}</p>}
+
+        <h1 style={{ fontSize: 20, margin: '0 0 4px' }}>{stream.title}</h1>
+        <p style={{ color: '#888', fontSize: 13, margin: '0 0 12px' }}>
+          @{stream.broadcaster}
+          {stream.category && <span style={{ color: '#6a3de8', marginLeft: 8 }}>{stream.category}</span>}
+          {' '}&mdash; {viewers} spettatori
+          {stream.is_live && <span style={{ color: '#e53935', marginLeft: 8 }}>● LIVE</span>}
+        </p>
+
+        {isBroadcaster ? (
+          <BroadcasterView streamId={id} onEnd={() => router.push('/')} />
+        ) : (
+          <ViewerPlayer streamId={id} />
+        )}
+
+        {user && !isBroadcaster && (
+          <div className="card" style={{ margin: '1rem 0' }}>
+            <strong>Supporta il creator 🪙</strong>
+            <p style={{ fontSize: 12, color: '#888', margin: '4px 0 8px' }}>Saldo: {balance} token</p>
+            <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
+              {TIP_PRESETS.map(amount => (
+                <button key={amount} disabled={tipSending || balance < amount} onClick={() => sendTip(amount)}
+                  style={{ fontSize: 13 }}>
+                  🪙 {amount}
+                </button>
+              ))}
+            </div>
+            {tipError && <p className="error-text" style={{ fontSize: 12, margin: '4px 0 0' }}>{tipError}</p>}
+            {balance < 10 && (
+              <p style={{ fontSize: 12, color: '#666', marginTop: 6 }}>
+                <a href="/tokens" style={{ color: '#a78bfa' }}>Acquista token →</a>
+              </p>
+            )}
           </div>
         )}
 
-        {/* Pulsanti in overlay sul video */}
-        {status === 'live' && (
-          <div style={{
-            position: 'absolute', bottom: 10, right: 10,
-            display: 'flex', gap: 8
-          }}>
-            {/* Cambio camera — visibile solo su mobile */}
-            <button
-              onClick={switchCamera}
-              title={facingMode === 'user' ? 'Passa a camera posteriore' : 'Passa a camera frontale'}
-              style={{
-                background: 'rgba(0,0,0,0.6)',
-                border: '1px solid rgba(255,255,255,0.3)',
-                color: '#fff',
-                borderRadius: 6,
-                padding: '8px 12px',
-                fontSize: 18,
-                cursor: 'pointer'
-              }}
-            >
-              🔄
-            </button>
-            <button
-              onClick={handleEnd}
-              style={{
-                background: '#e53935',
-                border: 'none',
-                color: '#fff',
-                borderRadius: 6,
-                padding: '8px 16px',
-                fontSize: 13,
-                fontWeight: 600,
-                cursor: 'pointer'
-              }}
-            >
-              Termina stream
-            </button>
+        <div className="chat-box">
+          <div className="chat-messages">
+            {messages.map(m => (
+              <div key={m.id} className={`msg${m.is_tip ? ' tip' : ''}`}>
+                {m.is_tip
+                  ? <span>🪙 <span className="username">{m.username}</span> {m.message}</span>
+                  : <><span className="username">{m.username}: </span><span>{m.message}</span></>
+                }
+              </div>
+            ))}
+            <div ref={messagesEndRef} />
           </div>
-        )}
+          {user ? (
+            <form className="chat-input" onSubmit={sendMessage}>
+              <input value={input} onChange={e => setInput(e.target.value)} placeholder="Scrivi un messaggio..." />
+              <button type="submit">Invia</button>
+            </form>
+          ) : (
+            <p style={{ padding: '0.5rem', fontSize: 13, color: '#666' }}>
+              <a href="/login" style={{ color: '#a78bfa' }}>Accedi</a> per partecipare alla chat.
+            </p>
+          )}
+        </div>
       </div>
     </div>
   );
