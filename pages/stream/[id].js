@@ -9,10 +9,11 @@ const TIP_PRESETS = [10, 25, 50, 100];
 
 // Componente broadcaster LiveKit (caricato dinamicamente per evitare SSR)
 function BroadcasterView({ streamId, onEnd }) {
-  const [room, setRoom] = useState(null);
+ const [room, setRoom] = useState(null);
   const [status, setStatus] = useState('connecting');
+  const [facingMode, setFacingMode] = useState('user'); // 'user' = frontale, 'environment' = posteriore
   const videoRef = useRef(null);
-
+  const currentVideoTrack = useRef(null);
   useEffect(() => {
     let lkRoom;
 
