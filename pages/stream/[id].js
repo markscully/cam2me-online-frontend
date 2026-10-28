@@ -4,6 +4,7 @@ import { io } from 'socket.io-client';
 import Navbar from '../../components/Navbar';
 import { useAuth } from '../../context/AuthContext';
 import { api, API_URL } from '../../lib/api';
+import ReportButton from '../../components/ReportButton';
 
 const TIP_PRESETS = [10, 25, 50, 100];
 
@@ -269,11 +270,13 @@ export default function StreamPage() {
   const [error, setError] = useState('');
   const [tipError, setTipError] = useState('');
   const [tipSending, setTipSending] = useState(false);
+  const [chatError, setChatError] = useState('');
 
   const socketRef = useRef(null);
   const messagesEndRef = useRef(null);
 
   const isBroadcaster = isBroadcasterParam === '1' || (user && stream && stream.broadcaster === user.username);
+  const token = typeof window !== 'undefined' ? localStorage.getItem('token') : null;
 
   useEffect(() => {
     if (!id) return;
@@ -289,7 +292,6 @@ export default function StreamPage() {
 
   useEffect(() => {
     if (!id || !user) return;
-    const token = localStorage.getItem('token');
     const socket = io(API_URL, { auth: { token } });
     socketRef.current = socket;
 
@@ -299,6 +301,10 @@ export default function StreamPage() {
     socket.on('balance_update', ({ balance }) => setBalanceDirect(balance));
     socket.on('tip_error', ({ error }) => { setTipError(error); setTipSending(false); });
     socket.on('stream_offline', () => router.push('/'));
+    socket.on('chat_error', ({ error }) => {
+      setChatError(error);
+      setTimeout(() => setChatError(''), 5000);
+    });
 
     return () => socket.disconnect();
   }, [id, user, setBalanceDirect]);
@@ -331,11 +337,15 @@ export default function StreamPage() {
         {error && <p className="error-text">{error}</p>}
 
         <h1 style={{ fontSize: 20, margin: '0 0 4px' }}>{stream.title}</h1>
-        <p style={{ color: '#888', fontSize: 13, margin: '0 0 12px' }}>
+        <p style={{ color: '#888', fontSize: 13, margin: '0 0 12px', display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
           @{stream.broadcaster}
-          {stream.category && <span style={{ color: '#6a3de8', marginLeft: 8 }}>{stream.category}</span>}
-          {' '}&mdash; {viewers} spettatori
-          {stream.is_live && <span style={{ color: '#e53935', marginLeft: 8 }}>● LIVE</span>}
+          {stream.category && <span style={{ color: '#6a3de8' }}>{stream.category}</span>}
+          <span>&mdash; {viewers} spettatori</span>
+          {stream.is_live && <span style={{ color: '#e53935' }}>● LIVE</span>}
+          {/* Pulsante segnala — visibile solo ai viewer loggati */}
+          {user && !isBroadcaster && (
+            <ReportButton streamId={id} token={token} />
+          )}
         </p>
 
         {isBroadcaster ? (
@@ -378,10 +388,17 @@ export default function StreamPage() {
             <div ref={messagesEndRef} />
           </div>
           {user ? (
-            <form className="chat-input" onSubmit={sendMessage}>
-              <input value={input} onChange={e => setInput(e.target.value)} placeholder="Scrivi un messaggio..." />
-              <button type="submit">Invia</button>
-            </form>
+            <>
+              {chatError && (
+                <p style={{ padding: '0.4rem 0.75rem', fontSize: 12, color: '#e74c3c', background: '#1a0a0a', margin: 0 }}>
+                  {chatError}
+                </p>
+              )}
+              <form className="chat-input" onSubmit={sendMessage}>
+                <input value={input} onChange={e => setInput(e.target.value)} placeholder="Scrivi un messaggio..." />
+                <button type="submit">Invia</button>
+              </form>
+            </>
           ) : (
             <p style={{ padding: '0.5rem', fontSize: 13, color: '#666' }}>
               <a href="/login" style={{ color: '#a78bfa' }}>Accedi</a> per partecipare alla chat.
