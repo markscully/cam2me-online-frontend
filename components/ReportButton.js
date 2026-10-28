@@ -4,7 +4,6 @@ import { useState } from 'react';
 const API = process.env.NEXT_PUBLIC_API_URL;
 
 const REASONS = [
-  'Nudità esplicita',
   'Fumo o alcol',
   'Autolesionismo',
   'Violenza',
