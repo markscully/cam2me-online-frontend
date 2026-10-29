@@ -21,35 +21,46 @@ export default function AdminDashboard() {
   useEffect(() => {
     if (!user) return;
     if (user.role !== 'admin') { router.push('/'); return; }
-    fetchStats();
-    fetchUsers();
-  }, [user]);
+    if (token) {
+      fetchStats();
+      fetchUsers();
+    }
+  }, [user, token]);
 
   async function fetchStats() {
+    if (!token) return;
     setLoadingStats(true);
     try {
       const res = await fetch(`${API}/api/admin/stats`, {
         headers: { Authorization: `Bearer ${token}` }
       });
       const data = await res.json();
-      setStats(data);
-    } catch { setMessage('Errore caricamento statistiche'); }
+      setStats(res.ok ? data : null);
+    } catch { 
+      setMessage('Errore caricamento statistiche'); 
+    }
     setLoadingStats(false);
   }
 
   async function fetchUsers() {
+    if (!token) return;
     setLoadingUsers(true);
     try {
       const res = await fetch(`${API}/api/admin/users`, {
         headers: { Authorization: `Bearer ${token}` }
       });
       const data = await res.json();
-      setUsers(data);
-    } catch { setMessage('Errore caricamento utenti'); }
+      // GARANZIA: Assicuriamoci che 'data' sia un array, altrimenti mettiamo []
+      setUsers(Array.isArray(data) ? data : []);
+    } catch { 
+      setMessage('Errore caricamento utenti'); 
+      setUsers([]);
+    }
     setLoadingUsers(false);
   }
 
   async function changeRole(userId, newRole) {
+    if (!token) return;
     const label = newRole === 'admin' ? 'admin' : newRole === 'banned' ? 'bannato' : 'utente normale';
     if (!confirm(`Impostare questo utente come ${label}?`)) return;
     try {
@@ -67,9 +78,11 @@ export default function AdminDashboard() {
     setTimeout(() => setMessage(''), 3000);
   }
 
-  const filtered = users.filter(u =>
-    u.username.toLowerCase().includes(search.toLowerCase()) ||
-    u.email.toLowerCase().includes(search.toLowerCase())
+  // CONTROLLO DI SICUREZZA: se users non è un array, usiamo una lista vuota
+  const safeUsers = Array.isArray(users) ? users : [];
+  const filtered = safeUsers.filter(u =>
+    (u.username && u.username.toLowerCase().includes(search.toLowerCase())) ||
+    (u.email && u.email.toLowerCase().includes(search.toLowerCase()))
   );
 
   if (!user || user.role !== 'admin') return null;
@@ -173,7 +186,7 @@ export default function AdminDashboard() {
                     <td style={{ padding: '8px 10px' }}>{roleBadge(u.role)}</td>
                     <td style={{ padding: '8px 10px', color: '#ffd54f' }}>{u.token_balance} 🪙</td>
                     <td style={{ padding: '8px 10px', color: '#555' }}>
-                      {new Date(u.created_at).toLocaleDateString('it-IT')}
+                      {u.created_at ? new Date(u.created_at).toLocaleDateString('it-IT') : '—'}
                     </td>
                     <td style={{ padding: '8px 10px' }}>
                       {u.id !== user.id && (
