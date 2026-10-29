@@ -13,8 +13,11 @@ export default function Navbar() {
             <Link href="/tokens">
               <span style={{ color: '#ffd54f', marginLeft: '1rem' }}>🪙 {balance}</span>
             </Link>
-            <Link href="/dashboard">
+            <Link href="/profile">
               <span style={{ marginLeft: '1rem', color: '#c9c8c5' }}>{user.username}</span>
+            </Link>
+            <Link href="/dashboard">
+              <span style={{ marginLeft: '1rem', color: '#888', fontSize: 13 }}>Dashboard</span>
             </Link>
             <Link href="/create-stream"><button style={{ marginLeft: '1rem' }}>Vai Live</button></Link>
             <button onClick={logout} style={{ marginLeft: '0.5rem', background: 'transparent', border: '1px solid #444', color: '#888' }}>Esci</button>
