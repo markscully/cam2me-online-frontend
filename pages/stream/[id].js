@@ -1,3 +1,4 @@
+
 import { useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/router';
 import { io } from 'socket.io-client';
@@ -5,12 +6,11 @@ import Navbar from '../../components/Navbar';
 import { useAuth } from '../../context/AuthContext';
 import { api, API_URL } from '../../lib/api';
 import ReportButton from '../../components/ReportButton';
-import RtmpPanel from '../../components/RtmpPanel';
 
 const TIP_PRESETS = [10, 25, 50, 100];
 
 // Componente broadcaster LiveKit
-function BroadcasterView({ streamId, onEnd, token }) {
+function BroadcasterView({ streamId, onEnd }) {
   const [room, setRoom] = useState(null);
   const [status, setStatus] = useState('connecting');
   const [facingMode, setFacingMode] = useState('user');
@@ -40,11 +40,16 @@ function BroadcasterView({ streamId, onEnd, token }) {
 
         for (const track of tracks) {
           await lkRoom.localParticipant.publishTrack(track);
+
           if (track.kind === 'video') {
             currentVideoTrack.current = track;
-            if (videoRef.current) track.attach(videoRef.current);
+
+            if (videoRef.current) {
+              track.attach(videoRef.current);
+            }
           }
         }
+
         setStatus('live');
       } catch (err) {
         console.error('[LiveKit broadcaster]', err);
@@ -55,20 +60,29 @@ function BroadcasterView({ streamId, onEnd, token }) {
     start();
 
     return () => {
-      if (lkRoomRef.current) lkRoomRef.current.disconnect();
+      if (lkRoomRef.current) {
+        lkRoomRef.current.disconnect();
+      }
     };
   }, [streamId]);
 
   async function switchCamera() {
     if (!lkRoomRef.current || !currentVideoTrack.current) return;
+
     try {
       const newFacing = facingMode === 'user' ? 'environment' : 'user';
       const { createLocalVideoTrack } = await import('livekit-client');
 
       currentVideoTrack.current.stop();
-      await lkRoomRef.current.localParticipant.unpublishTrack(currentVideoTrack.current);
 
-      const newTrack = await createLocalVideoTrack({ facingMode: newFacing });
+      await lkRoomRef.current.localParticipant.unpublishTrack(
+        currentVideoTrack.current
+      );
+
+      const newTrack = await createLocalVideoTrack({
+        facingMode: newFacing
+      });
+
       await lkRoomRef.current.localParticipant.publishTrack(newTrack);
 
       if (videoRef.current) {
@@ -84,7 +98,10 @@ function BroadcasterView({ streamId, onEnd, token }) {
   }
 
   async function handleEnd() {
-    if (lkRoomRef.current) lkRoomRef.current.disconnect();
+    if (lkRoomRef.current) {
+      lkRoomRef.current.disconnect();
+    }
+
     await api.endStream(streamId);
     onEnd();
   }
@@ -98,7 +115,7 @@ function BroadcasterView({ streamId, onEnd, token }) {
         margin: '0 auto',
         background: '#000',
         borderRadius: 8,
-        overflow: 'hidden',
+        overflow: 'hidden'
       }}>
         <video
           ref={videoRef}
@@ -117,9 +134,14 @@ function BroadcasterView({ streamId, onEnd, token }) {
 
         {status === 'connecting' && (
           <div style={{
-            position: 'absolute', inset: 0,
-            display: 'flex', alignItems: 'center', justifyContent: 'center',
-            color: '#ffb74d', fontSize: 14, background: 'rgba(0,0,0,0.7)'
+            position: 'absolute',
+            inset: 0,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            color: '#ffb74d',
+            fontSize: 14,
+            background: 'rgba(0,0,0,0.7)'
           }}>
             Connessione in corso...
           </div>
@@ -127,10 +149,16 @@ function BroadcasterView({ streamId, onEnd, token }) {
 
         {status === 'error' && (
           <div style={{
-            position: 'absolute', inset: 0,
-            display: 'flex', alignItems: 'center', justifyContent: 'center',
-            color: '#ff6b6b', fontSize: 14, textAlign: 'center',
-            padding: '1rem', background: 'rgba(0,0,0,0.8)'
+            position: 'absolute',
+            inset: 0,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            color: '#ff6b6b',
+            fontSize: 14,
+            textAlign: 'center',
+            padding: '1rem',
+            background: 'rgba(0,0,0,0.8)'
           }}>
             Errore connessione LiveKit.<br />
             Controlla i permessi della fotocamera.
@@ -139,10 +167,15 @@ function BroadcasterView({ streamId, onEnd, token }) {
 
         {status === 'live' && (
           <div style={{
-            position: 'absolute', top: 10, left: 10,
-            background: '#e53935', color: '#fff',
-            fontSize: 11, fontWeight: 700,
-            padding: '3px 8px', borderRadius: 4
+            position: 'absolute',
+            top: 10,
+            left: 10,
+            background: '#e53935',
+            color: '#fff',
+            fontSize: 11,
+            fontWeight: 700,
+            padding: '3px 8px',
+            borderRadius: 4
           }}>
             ● LIVE
           </div>
@@ -150,12 +183,17 @@ function BroadcasterView({ streamId, onEnd, token }) {
 
         {status === 'live' && (
           <div style={{
-            position: 'absolute', bottom: 10, right: 10,
-            display: 'flex', gap: 8
+            position: 'absolute',
+            bottom: 10,
+            right: 10,
+            display: 'flex',
+            gap: 8
           }}>
             <button
               onClick={switchCamera}
-              title={facingMode === 'user' ? 'Passa a camera posteriore' : 'Passa a camera frontale'}
+              title={facingMode === 'user'
+                ? 'Passa a camera posteriore'
+                : 'Passa a camera frontale'}
               style={{
                 background: 'rgba(0,0,0,0.6)',
                 border: '1px solid rgba(255,255,255,0.3)',
@@ -169,6 +207,7 @@ function BroadcasterView({ streamId, onEnd, token }) {
             >
               🔄
             </button>
+
             <button
               onClick={handleEnd}
               style={{
@@ -186,11 +225,6 @@ function BroadcasterView({ streamId, onEnd, token }) {
             </button>
           </div>
         )}
-      </div>
-
-      {/* Pannello RTMP per Streamlabs/OBS — sotto il video */}
-      <div style={{ maxWidth: 560, margin: '0 auto' }}>
-        <RtmpPanel streamId={streamId} token={token} />
       </div>
     </div>
   );
@@ -229,7 +263,10 @@ function ViewerPlayer({ streamId }) {
     }
 
     start();
-    return () => { if (lkRoom) lkRoom.disconnect(); };
+
+    return () => {
+      if (lkRoom) lkRoom.disconnect();
+    };
   }, [streamId]);
 
   return (
@@ -249,10 +286,30 @@ function ViewerPlayer({ streamId }) {
           background: '#000'
         }}
       />
-      {status === 'connecting' && <p style={{ color: '#ffb74d', fontSize: 13 }}>Connessione allo stream...</p>}
-      {status === 'waiting' && <p style={{ color: '#888', fontSize: 13 }}>In attesa del broadcaster...</p>}
-      {status === 'offline' && <p style={{ color: '#888', fontSize: 13 }}>Lo stream è terminato.</p>}
-      {status === 'error' && <p className="error-text" style={{ fontSize: 13 }}>Errore connessione.</p>}
+
+      {status === 'connecting' && (
+        <p style={{ color: '#ffb74d', fontSize: 13 }}>
+          Connessione allo stream...
+        </p>
+      )}
+
+      {status === 'waiting' && (
+        <p style={{ color: '#888', fontSize: 13 }}>
+          In attesa del broadcaster...
+        </p>
+      )}
+
+      {status === 'offline' && (
+        <p style={{ color: '#888', fontSize: 13 }}>
+          Lo stream è terminato.
+        </p>
+      )}
+
+      {status === 'error' && (
+        <p className="error-text" style={{ fontSize: 13 }}>
+          Errore connessione.
+        </p>
+      )}
     </div>
   );
 }
@@ -274,16 +331,36 @@ export default function StreamPage() {
   const socketRef = useRef(null);
   const messagesEndRef = useRef(null);
 
-  const isBroadcaster = isBroadcasterParam === '1' || (user && stream && stream.broadcaster === user.username);
-  const token = typeof window !== 'undefined' ? localStorage.getItem('token') : null;
+  const isBroadcaster =
+    isBroadcasterParam === '1' ||
+    (user && stream && stream.broadcaster === user.username);
+
+  const token = typeof window !== 'undefined'
+    ? localStorage.getItem('token')
+    : null;
 
   useEffect(() => {
     if (!id) return;
-    api.getStream(id).then(s => { setStream(s); setViewers(s.viewers); }).catch(err => setError(err.message));
-    api.getMessages(id).then(setMessages).catch(() => {});
+
+    api.getStream(id)
+      .then(s => {
+        setStream(s);
+        setViewers(s.viewers);
+      })
+      .catch(err => setError(err.message));
+
+    api.getMessages(id)
+      .then(setMessages)
+      .catch(() => {});
 
     const interval = setInterval(() => {
-      api.getStream(id).then(s => setStream(prev => prev ? { ...prev, is_live: s.is_live } : s)).catch(() => {});
+      api.getStream(id)
+        .then(s => {
+          setStream(prev =>
+            prev ? { ...prev, is_live: s.is_live } : s
+          );
+        })
+        .catch(() => {});
     }, 10000);
 
     return () => clearInterval(interval);
@@ -291,15 +368,32 @@ export default function StreamPage() {
 
   useEffect(() => {
     if (!id || !user) return;
-    const socket = io(API_URL, { auth: { token } });
+
+    const socket = io(API_URL, {
+      auth: { token }
+    });
+
     socketRef.current = socket;
 
     socket.on('connect', () => socket.emit('join_stream', id));
-    socket.on('chat_message', msg => setMessages(prev => [...prev, msg]));
+
+    socket.on('chat_message', msg =>
+      setMessages(prev => [...prev, msg])
+    );
+
     socket.on('viewer_count', count => setViewers(count));
-    socket.on('balance_update', ({ balance }) => setBalanceDirect(balance));
-    socket.on('tip_error', ({ error }) => { setTipError(error); setTipSending(false); });
+
+    socket.on('balance_update', ({ balance }) =>
+      setBalanceDirect(balance)
+    );
+
+    socket.on('tip_error', ({ error }) => {
+      setTipError(error);
+      setTipSending(false);
+    });
+
     socket.on('stream_offline', () => router.push('/'));
+
     socket.on('chat_error', ({ error }) => {
       setChatError(error);
       setTimeout(() => setChatError(''), 5000);
@@ -309,97 +403,230 @@ export default function StreamPage() {
   }, [id, user, setBalanceDirect]);
 
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    messagesEndRef.current?.scrollIntoView({
+      behavior: 'smooth'
+    });
   }, [messages]);
 
   function sendMessage(e) {
     e.preventDefault();
+
     if (!input.trim() || !socketRef.current) return;
-    socketRef.current.emit('chat_message', { streamId: id, message: input });
+
+    socketRef.current.emit('chat_message', {
+      streamId: id,
+      message: input
+    });
+
     setInput('');
   }
 
   function sendTip(amount) {
     if (!socketRef.current) return;
+
     setTipError('');
     setTipSending(true);
-    socketRef.current.emit('send_tip', { streamId: id, amount });
+
+    socketRef.current.emit('send_tip', {
+      streamId: id,
+      amount
+    });
+
     setTimeout(() => setTipSending(false), 600);
   }
 
-  if (!stream) return <div><Navbar /><div className="container"><p>Caricamento...</p></div></div>;
+  if (!stream) {
+    return (
+      <div>
+        <Navbar />
+        <div className="container">
+          <p>Caricamento...</p>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div>
       <Navbar />
+
       <div className="container">
         {error && <p className="error-text">{error}</p>}
 
-        <h1 style={{ fontSize: 20, margin: '0 0 4px' }}>{stream.title}</h1>
-        <p style={{ color: '#888', fontSize: 13, margin: '0 0 12px', display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+        <h1 style={{
+          fontSize: 20,
+          margin: '0 0 4px'
+        }}>
+          {stream.title}
+        </h1>
+
+        <p style={{
+          color: '#888',
+          fontSize: 13,
+          margin: '0 0 12px',
+          display: 'flex',
+          alignItems: 'center',
+          gap: 10,
+          flexWrap: 'wrap'
+        }}>
           @{stream.broadcaster}
-          {stream.category && <span style={{ color: '#6a3de8' }}>{stream.category}</span>}
+
+          {stream.category && (
+            <span style={{ color: '#6a3de8' }}>
+              {stream.category}
+            </span>
+          )}
+
           <span>&mdash; {viewers} spettatori</span>
-          {stream.is_live && <span style={{ color: '#e53935' }}>● LIVE</span>}
+
+          {stream.is_live && (
+            <span style={{ color: '#e53935' }}>
+              ● LIVE
+            </span>
+          )}
+
           {user && !isBroadcaster && (
             <ReportButton streamId={id} token={token} />
           )}
         </p>
 
         {isBroadcaster ? (
-          <BroadcasterView streamId={id} onEnd={() => router.push('/')} token={token} />
+          <BroadcasterView
+            streamId={id}
+            onEnd={() => router.push('/')}
+          />
         ) : (
           <ViewerPlayer streamId={id} />
         )}
 
+        {/* Supporto token */}
         {user && !isBroadcaster && (
           <div className="card" style={{ margin: '1rem 0' }}>
             <strong>Supporta il creator 🪙</strong>
-            <p style={{ fontSize: 12, color: '#888', margin: '4px 0 8px' }}>Saldo: {balance} token</p>
-            <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
+
+            <p style={{
+              fontSize: 12,
+              color: '#888',
+              margin: '4px 0 8px'
+            }}>
+              Saldo: {balance} token
+            </p>
+
+            <div style={{
+              display: 'flex',
+              gap: '0.5rem',
+              flexWrap: 'wrap'
+            }}>
               {TIP_PRESETS.map(amount => (
-                <button key={amount} disabled={tipSending || balance < amount} onClick={() => sendTip(amount)}
-                  style={{ fontSize: 13 }}>
+                <button
+                  key={amount}
+                  disabled={tipSending || balance < amount}
+                  onClick={() => sendTip(amount)}
+                  style={{ fontSize: 13 }}
+                >
                   🪙 {amount}
                 </button>
               ))}
             </div>
-            {tipError && <p className="error-text" style={{ fontSize: 12, margin: '4px 0 0' }}>{tipError}</p>}
+
+            {tipError && (
+              <p className="error-text" style={{
+                fontSize: 12,
+                margin: '4px 0 0'
+              }}>
+                {tipError}
+              </p>
+            )}
+
             {balance < 10 && (
-              <p style={{ fontSize: 12, color: '#666', marginTop: 6 }}>
-                <a href="/tokens" style={{ color: '#a78bfa' }}>Acquista token →</a>
+              <p style={{
+                fontSize: 12,
+                color: '#666',
+                marginTop: 6
+              }}>
+                <a
+                  href="/tokens"
+                  style={{ color: '#a78bfa' }}
+                >
+                  Acquista token →
+                </a>
               </p>
             )}
           </div>
         )}
 
+        {/* Chat */}
         <div className="chat-box">
           <div className="chat-messages">
             {messages.map(m => (
-              <div key={m.id} className={`msg${m.is_tip ? ' tip' : ''}`}>
+              <div
+                key={m.id}
+                className={`msg${m.is_tip ? ' tip' : ''}`}
+              >
                 {m.is_tip
-                  ? <span>🪙 <span className="username">{m.username}</span> {m.message}</span>
-                  : <><span className="username">{m.username}: </span><span>{m.message}</span></>
+                  ? (
+                    <span>
+                      🪙 <span className="username">
+                        {m.username}
+                      </span> {m.message}
+                    </span>
+                  )
+                  : (
+                    <>
+                      <span className="username">
+                        {m.username}: 
+                      </span>
+                      <span>{m.message}</span>
+                    </>
+                  )
                 }
               </div>
             ))}
+
             <div ref={messagesEndRef} />
           </div>
+
           {user ? (
             <>
               {chatError && (
-                <p style={{ padding: '0.4rem 0.75rem', fontSize: 12, color: '#e74c3c', background: '#1a0a0a', margin: 0 }}>
+                <p style={{
+                  padding: '0.4rem 0.75rem',
+                  fontSize: 12,
+                  color: '#e74c3c',
+                  background: '#1a0a0a',
+                  margin: 0
+                }}>
                   {chatError}
                 </p>
               )}
-              <form className="chat-input" onSubmit={sendMessage}>
-                <input value={input} onChange={e => setInput(e.target.value)} placeholder="Scrivi un messaggio..." />
-                <button type="submit">Invia</button>
+
+              <form
+                className="chat-input"
+                onSubmit={sendMessage}
+              >
+                <input
+                  value={input}
+                  onChange={e => setInput(e.target.value)}
+                  placeholder="Scrivi un messaggio..."
+                />
+
+                <button type="submit">
+                  Invia
+                </button>
               </form>
             </>
           ) : (
-            <p style={{ padding: '0.5rem', fontSize: 13, color: '#666' }}>
-              <a href="/login" style={{ color: '#a78bfa' }}>Accedi</a> per partecipare alla chat.
+            <p style={{
+              padding: '0.5rem',
+              fontSize: 13,
+              color: '#666'
+            }}>
+              <a
+                href="/login"
+                style={{ color: '#a78bfa' }}
+              >
+                Accedi
+              </a> per partecipare alla chat.
             </p>
           )}
         </div>
