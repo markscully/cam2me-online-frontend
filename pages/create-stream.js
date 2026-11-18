@@ -59,7 +59,7 @@ export default function CreateStream() {
           <button type="submit" style={{ width: '100%', marginTop: '1rem' }}>Crea stream e vai live</button>
         </form>
         <p style={{ fontSize: 12, color: '#666', marginTop: '1rem' }}>
-          La tua webcam verrà attivata direttamente nel browser tramite LiveKit — oppure nella tua dash home trovi tutto il necessario per andare live con obs/streamlabs.
+          La tua webcam verrà attivata direttamente nel browser tramite LiveKit — oppure nella tua dashhome trovi tutto il necessario per andare live con obs/streamlabs.
         </p>
       </div>
     </div>
