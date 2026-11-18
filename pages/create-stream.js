@@ -16,7 +16,8 @@ export default function CreateStream() {
 
   if (!user) {
     return (
-      <div><Navbar />
+      <div>
+        <Navbar />
         <div className="container"><p>Devi accedere per andare live.</p></div>
       </div>
     );
@@ -25,6 +26,13 @@ export default function CreateStream() {
   async function handleSubmit(e) {
     e.preventDefault();
     setError('');
+
+    // Controllo di sicurezza extra per la categoria
+    if (!form.category) {
+      setError('Seleziona una categoria per continuare.');
+      return;
+    }
+
     try {
       const stream = await api.createStream(form);
       router.push(`/stream/${stream.id}?broadcaster=1`);
@@ -50,16 +58,17 @@ export default function CreateStream() {
           <select
             value={form.category}
             onChange={e => setForm({ ...form, category: e.target.value })}
+            required
             style={{ width: '100%', padding: '0.6rem', background: '#0f0f12', border: '1px solid #333', borderRadius: 4, color: '#fff', marginTop: 4 }}
           >
-            <option value="">Seleziona categoria...</option>
+            <option value="" disabled>Seleziona categoria...</option>
             {CATEGORIES.map(c => <option key={c} value={c}>{c}</option>)}
           </select>
           {error && <p className="error-text">{error}</p>}
           <button type="submit" style={{ width: '100%', marginTop: '1rem' }}>Crea stream e vai live</button>
         </form>
         <p style={{ fontSize: 12, color: '#666', marginTop: '1rem' }}>
-          La tua webcam verrà attivata direttamente nel browser tramite LiveKit — oppure nella tua dashhome trovi tutto il necessario per andare live con obs/streamlabs.
+          La tua webcam verrà attivata direttamente nel browser tramite LiveKit — oppure nella tua dashome trovi tutto il necessario per usare obs o stramlabs.
         </p>
       </div>
     </div>
