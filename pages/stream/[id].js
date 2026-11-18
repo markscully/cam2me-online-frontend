@@ -5,14 +5,15 @@ import Navbar from '../../components/Navbar';
 import { useAuth } from '../../context/AuthContext';
 import { api, API_URL } from '../../lib/api';
 import ReportButton from '../../components/ReportButton';
+import RtmpPanel from '../../components/RtmpPanel';
 
 const TIP_PRESETS = [10, 25, 50, 100];
 
 // Componente broadcaster LiveKit
-function BroadcasterView({ streamId, onEnd }) {
+function BroadcasterView({ streamId, onEnd, token }) {
   const [room, setRoom] = useState(null);
   const [status, setStatus] = useState('connecting');
-  const [facingMode, setFacingMode] = useState('user'); // 'user' = frontale, 'environment' = posteriore
+  const [facingMode, setFacingMode] = useState('user');
   const videoRef = useRef(null);
   const currentVideoTrack = useRef(null);
   const lkRoomRef = useRef(null);
@@ -58,23 +59,19 @@ function BroadcasterView({ streamId, onEnd }) {
     };
   }, [streamId]);
 
-  // Cambio camera frontale ↔ posteriore
   async function switchCamera() {
     if (!lkRoomRef.current || !currentVideoTrack.current) return;
     try {
       const newFacing = facingMode === 'user' ? 'environment' : 'user';
       const { createLocalVideoTrack } = await import('livekit-client');
 
-      // Ferma il track attuale
       currentVideoTrack.current.stop();
       await lkRoomRef.current.localParticipant.unpublishTrack(currentVideoTrack.current);
 
-      // Crea nuovo track con la camera opposta
       const newTrack = await createLocalVideoTrack({ facingMode: newFacing });
       await lkRoomRef.current.localParticipant.publishTrack(newTrack);
 
       if (videoRef.current) {
-        // Stacca il vecchio e attacca il nuovo
         videoRef.current.srcObject = null;
         newTrack.attach(videoRef.current);
       }
@@ -102,7 +99,6 @@ function BroadcasterView({ streamId, onEnd }) {
         background: '#000',
         borderRadius: 8,
         overflow: 'hidden',
-        // Nessun aspect-ratio fisso — si adatta al video reale (verticale o orizzontale)
       }}>
         <video
           ref={videoRef}
@@ -157,7 +153,6 @@ function BroadcasterView({ streamId, onEnd }) {
             position: 'absolute', bottom: 10, right: 10,
             display: 'flex', gap: 8
           }}>
-            {/* Pulsante cambio camera */}
             <button
               onClick={switchCamera}
               title={facingMode === 'user' ? 'Passa a camera posteriore' : 'Passa a camera frontale'}
@@ -174,7 +169,6 @@ function BroadcasterView({ streamId, onEnd }) {
             >
               🔄
             </button>
-            {/* Pulsante termina stream */}
             <button
               onClick={handleEnd}
               style={{
@@ -192,6 +186,11 @@ function BroadcasterView({ streamId, onEnd }) {
             </button>
           </div>
         )}
+      </div>
+
+      {/* Pannello RTMP per Streamlabs/OBS — sotto il video */}
+      <div style={{ maxWidth: 560, margin: '0 auto' }}>
+        <RtmpPanel streamId={streamId} token={token} />
       </div>
     </div>
   );
@@ -342,14 +341,13 @@ export default function StreamPage() {
           {stream.category && <span style={{ color: '#6a3de8' }}>{stream.category}</span>}
           <span>&mdash; {viewers} spettatori</span>
           {stream.is_live && <span style={{ color: '#e53935' }}>● LIVE</span>}
-          {/* Pulsante segnala — visibile solo ai viewer loggati */}
           {user && !isBroadcaster && (
             <ReportButton streamId={id} token={token} />
           )}
         </p>
 
         {isBroadcaster ? (
-          <BroadcasterView streamId={id} onEnd={() => router.push('/')} />
+          <BroadcasterView streamId={id} onEnd={() => router.push('/')} token={token} />
         ) : (
           <ViewerPlayer streamId={id} />
         )}
