@@ -1,7 +1,7 @@
-
 import { useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/router';
 import { io } from 'socket.io-client';
+import Link from 'next/link';
 import Navbar from '../../components/Navbar';
 import { useAuth } from '../../context/AuthContext';
 import { api, API_URL } from '../../lib/api';
@@ -469,7 +469,13 @@ export default function StreamPage() {
           gap: 10,
           flexWrap: 'wrap'
         }}>
-          @{stream.broadcaster}
+          {/* Nome broadcaster cliccabile */}
+          <Link
+            href={`/profile/${stream.broadcaster}`}
+            style={{ color: '#a78bfa', textDecoration: 'none', fontWeight: 500 }}
+          >
+            @{stream.broadcaster}
+          </Link>
 
           {stream.category && (
             <span style={{ color: '#6a3de8' }}>
@@ -574,7 +580,7 @@ export default function StreamPage() {
                   : (
                     <>
                       <span className="username">
-                        {m.username}: 
+                        {m.username}:
                       </span>
                       <span>{m.message}</span>
                     </>
