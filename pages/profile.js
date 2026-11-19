@@ -124,9 +124,7 @@ export default function ProfilePage() {
             }}>+ Acquista token</a>
           </div>
         </div>
-<Link href={`/messages/${username}`}>
-  <button>💬 Invia messaggio</button>
-</Link>
+
         {/* Statistiche rapide */}
         <div style={{ display: 'flex', gap: 12, marginBottom: '1.5rem', flexWrap: 'wrap' }}>
           {[
