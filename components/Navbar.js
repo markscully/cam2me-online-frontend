@@ -1,4 +1,4 @@
-aimport Link from 'next/link';
+import Link from 'next/link';
 import { useAuth } from '../context/AuthContext';
 
 export default function Navbar() {
@@ -14,7 +14,7 @@ export default function Navbar() {
               <span style={{ color: '#ffd54f', marginLeft: '1rem' }}>🪙 {balance}</span>
             </Link>
             <Link href="/messages">
-              <span style={{ marginLeft: '1rem', color: '#c9c8c5' }}>{messages}</span>
+              <span style={{ marginLeft: '1rem', color: '#c9c8c5' }}>💬</span>
             </Link>
             <Link href="/profile">
               <span style={{ marginLeft: '1rem', color: '#c9c8c5' }}>{user.username}</span>
