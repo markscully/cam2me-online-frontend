@@ -14,7 +14,7 @@ export default function Navbar() {
               <span style={{ color: '#ffd54f', marginLeft: '1rem' }}>🪙 {balance}</span>
             </Link>
             <Link href="/messages">
-              <span style={{ marginLeft: '1rem', color: '#c9c8c5' }}>💬</span>
+              <span style={{ marginLeft: '1rem', color: '#c9c8c5' }}>Messaggi</span>
             </Link>
             <Link href="/profile">
               <span style={{ marginLeft: '1rem', color: '#c9c8c5' }}>{user.username}</span>
