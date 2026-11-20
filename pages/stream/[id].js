@@ -30,6 +30,49 @@ function BroadcasterView({ streamId, onEnd }) {
   const currentAudioTrack = useRef(null);
   const lkRoomRef = useRef(null);
 
+  async function attachFreshAudioTrack(room, { forceRecreate = false } = {}) {
+    const { createLocalAudioTrack } = await import('livekit-client');
+
+    if (forceRecreate && currentAudioTrack.current) {
+      try {
+        if (room && room.localParticipant) {
+          await room.localParticipant.unpublishTrack(currentAudioTrack.current);
+        }
+      } catch (e) {}
+
+      try {
+        currentAudioTrack.current.stop();
+      } catch (e) {}
+
+      currentAudioTrack.current = null;
+    }
+
+    let audioTrack = currentAudioTrack.current;
+
+    if (!isTrackLive(audioTrack)) {
+      audioTrack = await createLocalAudioTrack({
+        echoCancellation: true,
+        noiseSuppression: true,
+        autoGainControl: true
+      });
+      currentAudioTrack.current = audioTrack;
+
+      if (room && room.localParticipant) {
+        await room.localParticipant.publishTrack(audioTrack);
+      }
+    }
+
+    if (audioTrack && typeof audioTrack.unmute === 'function') {
+      await audioTrack.unmute();
+    }
+
+    if (audioTrack && audioTrack.mediaStreamTrack) {
+      audioTrack.mediaStreamTrack.enabled = true;
+    }
+
+    return audioTrack;
+  }
+
   useEffect(() => {
     if (!started) return;
 
@@ -43,8 +86,7 @@ function BroadcasterView({ streamId, onEnd }) {
 
         const {
           Room,
-          createLocalVideoTrack,
-          createLocalAudioTrack
+          createLocalVideoTrack
         } = await import('livekit-client');
 
         const { token, livekitUrl } =
@@ -72,28 +114,37 @@ function BroadcasterView({ streamId, onEnd }) {
         }
 
         const videoTrack = await createLocalVideoTrack({ facingMode: 'user' });
-        const audioTrack = await createLocalAudioTrack();
 
         if (cancelled) {
           videoTrack.stop();
-          audioTrack.stop();
           lkRoom.disconnect(false);
           return;
         }
 
         await lkRoom.localParticipant.publishTrack(videoTrack);
-        await lkRoom.localParticipant.publishTrack(audioTrack);
-        await audioTrack.unmute();
-
         currentVideoTrack.current = videoTrack;
-        currentAudioTrack.current = audioTrack;
 
         if (videoRef.current) {
           videoTrack.attach(videoRef.current);
         }
 
+        try {
+          await attachFreshAudioTrack(lkRoom, { forceRecreate: false });
+          if (!cancelled) {
+            setMicMuted(false);
+            setMicNotice('');
+          }
+        } catch (audioErr) {
+          console.warn('[LiveKit audio init]', audioErr);
+          if (!cancelled) {
+            setMicMuted(true);
+            setMicNotice(
+              'Audio non attivo al momento: clicca l’icona 🎙️/🔇 per sbloccare il microfono.'
+            );
+          }
+        }
+
         if (!cancelled) {
-          setMicMuted(false);
           setStatus('live');
         }
       } catch (err) {
@@ -170,39 +221,25 @@ function BroadcasterView({ streamId, onEnd }) {
     }
   }
 
-  // Attiva/disattiva microfono
+  // Attiva/disattiva microfono (e ricrea la traccia se era muta/bloccata).
   async function toggleMic() {
     try {
       setMicNotice('');
 
-      if (!isTrackLive(currentAudioTrack.current)) {
-        const { createLocalAudioTrack } = await import('livekit-client');
-        const audioTrack = await createLocalAudioTrack();
-
-        currentAudioTrack.current = audioTrack;
-
-        if (lkRoomRef.current) {
-          await lkRoomRef.current.localParticipant.publishTrack(audioTrack);
-        }
-
-        await audioTrack.unmute();
-        setMicMuted(false);
+      if (!micMuted && isTrackLive(currentAudioTrack.current)) {
+        await currentAudioTrack.current.mute();
+        setMicMuted(true);
         return;
       }
 
-      if (micMuted) {
-        await currentAudioTrack.current.unmute();
-        setMicMuted(false);
-      } else {
-        await currentAudioTrack.current.mute();
-        setMicMuted(true);
-      }
+      await attachFreshAudioTrack(lkRoomRef.current, { forceRecreate: true });
+      setMicMuted(false);
     } catch (err) {
       console.error('[toggleMic]', err);
       setMicMuted(true);
       setMicNotice(
         err?.name === 'NotAllowedError'
-          ? 'Permesso microfono bloccato nel browser. Controlla le impostazioni del sito in Chrome.'
+          ? 'Permesso microfono bloccato nel browser. Controlla i permessi del sito in Chrome.'
           : 'Impossibile attivare il microfono. Verifica che non sia usato da un’altra app.'
       );
     }
