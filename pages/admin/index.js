@@ -8,7 +8,7 @@ import Link from 'next/link';
 const API = process.env.NEXT_PUBLIC_API_URL;
 
 export default function AdminDashboard() {
-  const { user, token } = useAuth();
+  const { user } = useAuth();
   const router = useRouter();
 
   const [stats, setStats] = useState(null);
@@ -21,13 +21,16 @@ export default function AdminDashboard() {
   useEffect(() => {
     if (!user) return;
     if (user.role !== 'admin') { router.push('/'); return; }
-    if (token) {
-      fetchStats();
-      fetchUsers();
-    }
-  }, [user, token]);
+    fetchStats();
+    fetchUsers();
+  }, [user]);
+
+  function getToken() {
+    return typeof window !== 'undefined' ? localStorage.getItem('token') : null;
+  }
 
   async function fetchStats() {
+    const token = getToken();
     if (!token) return;
     setLoadingStats(true);
     try {
@@ -36,13 +39,14 @@ export default function AdminDashboard() {
       });
       const data = await res.json();
       setStats(res.ok ? data : null);
-    } catch { 
-      setMessage('Errore caricamento statistiche'); 
+    } catch {
+      setMessage('Errore caricamento statistiche');
     }
     setLoadingStats(false);
   }
 
   async function fetchUsers() {
+    const token = getToken();
     if (!token) return;
     setLoadingUsers(true);
     try {
@@ -50,16 +54,16 @@ export default function AdminDashboard() {
         headers: { Authorization: `Bearer ${token}` }
       });
       const data = await res.json();
-      // GARANZIA: Assicuriamoci che 'data' sia un array, altrimenti mettiamo []
       setUsers(Array.isArray(data) ? data : []);
-    } catch { 
-      setMessage('Errore caricamento utenti'); 
+    } catch {
+      setMessage('Errore caricamento utenti');
       setUsers([]);
     }
     setLoadingUsers(false);
   }
 
   async function changeRole(userId, newRole) {
+    const token = getToken();
     if (!token) return;
     const label = newRole === 'admin' ? 'admin' : newRole === 'banned' ? 'bannato' : 'utente normale';
     if (!confirm(`Impostare questo utente come ${label}?`)) return;
@@ -71,14 +75,13 @@ export default function AdminDashboard() {
       });
       const data = await res.json();
       if (data.success) {
-        setMessage(`Ruolo aggiornato`);
+        setMessage('Ruolo aggiornato');
         fetchUsers();
       } else setMessage(data.error || 'Errore');
     } catch { setMessage('Errore'); }
     setTimeout(() => setMessage(''), 3000);
   }
 
-  // CONTROLLO DI SICUREZZA: se users non è un array, usiamo una lista vuota
   const safeUsers = Array.isArray(users) ? users : [];
   const filtered = safeUsers.filter(u =>
     (u.username && u.username.toLowerCase().includes(search.toLowerCase())) ||
@@ -138,7 +141,7 @@ export default function AdminDashboard() {
         <h3 style={{ fontSize: 15, color: '#888', marginBottom: '0.75rem' }}>Statistiche sito</h3>
         {loadingStats ? (
           <p style={{ color: '#666', fontSize: 13 }}>Caricamento...</p>
-        ) : stats && (
+        ) : stats ? (
           <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginBottom: '2rem' }}>
             {statCard('Iscritti totali', stats.total_users)}
             {statCard('Stream effettuati', stats.total_streams, '#4fc3f7')}
@@ -146,6 +149,8 @@ export default function AdminDashboard() {
             {statCard('Token in circolo', stats.total_tokens, '#ffd54f')}
             {statCard('Tip totali', stats.total_tips, '#81c784')}
           </div>
+        ) : (
+          <p style={{ color: '#e74c3c', fontSize: 13 }}>Errore caricamento statistiche.</p>
         )}
 
         {/* LISTA UTENTI */}
