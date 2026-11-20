@@ -217,12 +217,14 @@ function BroadcasterView({ streamId, onEnd }) {
   );
 }
 
-// Componente viewer LiveKit — con audio e gestione autoplay
+// Componente viewer LiveKit — solo ricezione, niente microfono/camera
 function ViewerPlayer({ streamId }) {
   const [status, setStatus] = useState('connecting');
   const [muted, setMuted] = useState(true);
+  const [isFullscreen, setIsFullscreen] = useState(false);
   const videoRef = useRef(null);
   const audioRef = useRef(null);
+  const containerRef = useRef(null);
 
   useEffect(() => {
     let lkRoom;
@@ -232,7 +234,12 @@ function ViewerPlayer({ streamId }) {
         const { Room } = await import('livekit-client');
         const { token, livekitUrl } = await api.getViewerToken(streamId);
 
-        lkRoom = new Room();
+        // audioCaptureDefaults e videoCaptureDefaults disabilitati:
+        // il viewer non chiede mai permessi microfono/camera
+        lkRoom = new Room({
+          audioCaptureDefaults: { autoGainControl: false, echoCancellation: false, noiseSuppression: false },
+          publishDefaults: { simulcast: false },
+        });
 
         lkRoom.on('trackSubscribed', (track) => {
           if (track.kind === 'video' && videoRef.current) {
@@ -247,7 +254,10 @@ function ViewerPlayer({ streamId }) {
         lkRoom.on('disconnected', () => setStatus('offline'));
         lkRoom.on('connected', () => setStatus('waiting'));
 
-        await lkRoom.connect(livekitUrl, token);
+        // connect senza acquisire media locali
+        await lkRoom.connect(livekitUrl, token, {
+          autoSubscribe: true,
+        });
       } catch (err) {
         console.error('[LiveKit viewer]', err);
         setStatus('error');
@@ -261,6 +271,15 @@ function ViewerPlayer({ streamId }) {
     };
   }, [streamId]);
 
+  // Fullscreen listener
+  useEffect(() => {
+    function onFsChange() {
+      setIsFullscreen(!!document.fullscreenElement);
+    }
+    document.addEventListener('fullscreenchange', onFsChange);
+    return () => document.removeEventListener('fullscreenchange', onFsChange);
+  }, []);
+
   function enableAudio() {
     if (audioRef.current) {
       audioRef.current.muted = false;
@@ -269,8 +288,17 @@ function ViewerPlayer({ streamId }) {
     setMuted(false);
   }
 
+  function toggleFullscreen() {
+    if (!containerRef.current) return;
+    if (!document.fullscreenElement) {
+      containerRef.current.requestFullscreen().catch(() => {});
+    } else {
+      document.exitFullscreen();
+    }
+  }
+
   return (
-    <div style={{ position: 'relative' }}>
+    <div ref={containerRef} style={{ position: 'relative', background: '#000', borderRadius: 8, overflow: 'hidden' }}>
       <video
         ref={videoRef}
         autoPlay
@@ -279,17 +307,17 @@ function ViewerPlayer({ streamId }) {
           width: '100%',
           height: 'auto',
           display: 'block',
-          maxHeight: '72vh',
+          maxHeight: isFullscreen ? '100vh' : '72vh',
           objectFit: 'contain',
-          borderRadius: 8,
           background: '#000'
         }}
       />
       <audio ref={audioRef} autoPlay muted />
 
-      {/* Pulsante audio — fisso in basso a destra */}
+      {/* Pulsanti sovrapposti in basso a destra */}
       {status === 'playing' && (
-        <div style={{ position: 'absolute', bottom: 14, right: 14 }}>
+        <div style={{ position: 'absolute', bottom: 14, right: 14, display: 'flex', gap: 8 }}>
+          {/* Audio */}
           <button
             onClick={muted ? enableAudio : () => {
               if (audioRef.current) audioRef.current.muted = true;
@@ -309,20 +337,38 @@ function ViewerPlayer({ streamId }) {
           >
             {muted ? '🔇' : '🔊'}
           </button>
+
+          {/* Fullscreen */}
+          <button
+            onClick={toggleFullscreen}
+            style={{
+              background: 'rgba(0,0,0,0.6)',
+              color: '#fff',
+              border: '1px solid rgba(255,255,255,0.3)',
+              borderRadius: 6,
+              padding: '8px 12px',
+              fontSize: 16,
+              cursor: 'pointer',
+              lineHeight: 1
+            }}
+            title={isFullscreen ? 'Esci da schermo intero' : 'Schermo intero'}
+          >
+            {isFullscreen ? '✕' : '⛶'}
+          </button>
         </div>
       )}
 
       {status === 'connecting' && (
-        <p style={{ color: '#ffb74d', fontSize: 13 }}>Connessione allo stream...</p>
+        <p style={{ color: '#ffb74d', fontSize: 13, padding: '0.5rem' }}>Connessione allo stream...</p>
       )}
       {status === 'waiting' && (
-        <p style={{ color: '#888', fontSize: 13 }}>In attesa del broadcaster...</p>
+        <p style={{ color: '#888', fontSize: 13, padding: '0.5rem' }}>In attesa del broadcaster...</p>
       )}
       {status === 'offline' && (
-        <p style={{ color: '#888', fontSize: 13 }}>Lo stream è terminato.</p>
+        <p style={{ color: '#888', fontSize: 13, padding: '0.5rem' }}>Lo stream è terminato.</p>
       )}
       {status === 'error' && (
-        <p className="error-text" style={{ fontSize: 13 }}>Errore connessione.</p>
+        <p className="error-text" style={{ fontSize: 13, padding: '0.5rem' }}>Errore connessione.</p>
       )}
     </div>
   );
