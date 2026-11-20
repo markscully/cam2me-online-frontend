@@ -230,10 +230,11 @@ function BroadcasterView({ streamId, onEnd }) {
   );
 }
 
-// Componente viewer LiveKit
+// Componente viewer LiveKit — con audio
 function ViewerPlayer({ streamId }) {
   const [status, setStatus] = useState('connecting');
   const videoRef = useRef(null);
+  const audioRef = useRef(null);
 
   useEffect(() => {
     let lkRoom;
@@ -249,6 +250,9 @@ function ViewerPlayer({ streamId }) {
           if (track.kind === 'video' && videoRef.current) {
             track.attach(videoRef.current);
             setStatus('playing');
+          }
+          if (track.kind === 'audio' && audioRef.current) {
+            track.attach(audioRef.current);
           }
         });
 
@@ -286,6 +290,7 @@ function ViewerPlayer({ streamId }) {
           background: '#000'
         }}
       />
+      <audio ref={audioRef} autoPlay />
 
       {status === 'connecting' && (
         <p style={{ color: '#ffb74d', fontSize: 13 }}>
@@ -313,7 +318,6 @@ function ViewerPlayer({ streamId }) {
     </div>
   );
 }
-
 export default function StreamPage() {
   const router = useRouter();
   const { id, broadcaster: isBroadcasterParam } = router.query;
