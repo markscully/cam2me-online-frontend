@@ -230,9 +230,10 @@ function BroadcasterView({ streamId, onEnd }) {
   );
 }
 
-// Componente viewer LiveKit — con audio
+// Componente viewer LiveKit — con audio e gestione autoplay
 function ViewerPlayer({ streamId }) {
   const [status, setStatus] = useState('connecting');
+  const [muted, setMuted] = useState(true);
   const videoRef = useRef(null);
   const audioRef = useRef(null);
 
@@ -273,8 +274,16 @@ function ViewerPlayer({ streamId }) {
     };
   }, [streamId]);
 
+  function enableAudio() {
+    if (audioRef.current) {
+      audioRef.current.muted = false;
+      audioRef.current.play().catch(() => {});
+    }
+    setMuted(false);
+  }
+
   return (
-    <div>
+    <div style={{ position: 'relative' }}>
       <video
         ref={videoRef}
         autoPlay
@@ -290,7 +299,36 @@ function ViewerPlayer({ streamId }) {
           background: '#000'
         }}
       />
-      <audio ref={audioRef} autoPlay />
+      <audio ref={audioRef} autoPlay muted />
+
+      {/* Pulsante audio — fisso in basso a destra */}
+      {status === 'playing' && (
+        <div style={{
+          position: 'absolute',
+          bottom: 14,
+          right: 14,
+        }}>
+          <button
+            onClick={muted ? enableAudio : () => {
+              if (audioRef.current) audioRef.current.muted = true;
+              setMuted(true);
+            }}
+            style={{
+              background: 'rgba(0,0,0,0.6)',
+              color: '#fff',
+              border: '1px solid rgba(255,255,255,0.3)',
+              borderRadius: 6,
+              padding: '8px 12px',
+              fontSize: 16,
+              cursor: 'pointer',
+              lineHeight: 1
+            }}
+            title={muted ? 'Attiva audio' : 'Silenzia'}
+          >
+            {muted ? '🔇' : '🔊'}
+          </button>
+        </div>
+      )}
 
       {status === 'connecting' && (
         <p style={{ color: '#ffb74d', fontSize: 13 }}>
