@@ -271,13 +271,17 @@ function ViewerPlayer({ streamId }) {
     };
   }, [streamId]);
 
-  // Fullscreen listener
+  // Fullscreen listener (webkit per Safari/iOS)
   useEffect(() => {
     function onFsChange() {
-      setIsFullscreen(!!document.fullscreenElement);
+      setIsFullscreen(!!(document.fullscreenElement || document.webkitFullscreenElement));
     }
     document.addEventListener('fullscreenchange', onFsChange);
-    return () => document.removeEventListener('fullscreenchange', onFsChange);
+    document.addEventListener('webkitfullscreenchange', onFsChange);
+    return () => {
+      document.removeEventListener('fullscreenchange', onFsChange);
+      document.removeEventListener('webkitfullscreenchange', onFsChange);
+    };
   }, []);
 
   function enableAudio() {
@@ -289,11 +293,16 @@ function ViewerPlayer({ streamId }) {
   }
 
   function toggleFullscreen() {
-    if (!containerRef.current) return;
     if (!document.fullscreenElement) {
-      containerRef.current.requestFullscreen().catch(() => {});
+      const el = containerRef.current || videoRef.current;
+      if (!el) return;
+      (el.requestFullscreen || el.webkitRequestFullscreen || el.mozRequestFullScreen)
+        ? (el.requestFullscreen?.() || el.webkitRequestFullscreen?.() || el.mozRequestFullScreen?.())
+        : null;
     } else {
-      document.exitFullscreen();
+      (document.exitFullscreen || document.webkitExitFullscreen || document.mozCancelFullScreen)
+        ? (document.exitFullscreen?.() || document.webkitExitFullscreen?.() || document.mozCancelFullScreen?.())
+        : null;
     }
   }
 
