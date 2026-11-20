@@ -1,4 +1,3 @@
-
 import { useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/router';
 import { io } from 'socket.io-client';
@@ -15,11 +14,20 @@ const TIP_PRESETS = [10, 25, 50, 100];
 // quando il broadcaster rientra nella pagina.
 let retainedBroadcasterTracks = null;
 
+function isTrackLive(track) {
+  return Boolean(
+    track &&
+    track.mediaStreamTrack &&
+    track.mediaStreamTrack.readyState === 'live'
+  );
+}
+
 // Componente broadcaster LiveKit
 function BroadcasterView({ streamId, onEnd }) {
   const [status, setStatus] = useState('connecting');
   const [facingMode, setFacingMode] = useState('user');
   const [micMuted, setMicMuted] = useState(false);
+  const [micNotice, setMicNotice] = useState('');
 
   const videoRef = useRef(null);
   const currentVideoTrack = useRef(null);
@@ -32,7 +40,13 @@ function BroadcasterView({ streamId, onEnd }) {
 
     async function start() {
       try {
-        const { Room, createLocalTracks } = await import('livekit-client');
+        setMicNotice('');
+
+        const {
+          Room,
+          createLocalVideoTrack,
+          createLocalAudioTrack
+        } = await import('livekit-client');
 
         const { token, livekitUrl } =
           await api.getBroadcasterToken(streamId);
@@ -58,21 +72,17 @@ function BroadcasterView({ streamId, onEnd }) {
           return;
         }
 
-        // Verifica se esistono già tracce ancora attive.
-        const tracksUsable =
-          Array.isArray(retainedBroadcasterTracks) &&
-          retainedBroadcasterTracks.length > 0 &&
-          retainedBroadcasterTracks.every(track =>
-            track.mediaStreamTrack &&
-            track.mediaStreamTrack.readyState === 'live'
-          );
+        const cachedVideo = Array.isArray(retainedBroadcasterTracks)
+          ? retainedBroadcasterTracks.find(t => t.kind === 'video' && isTrackLive(t))
+          : null;
 
-        // Acquisisce webcam e microfono solo se necessario.
-        if (!tracksUsable) {
-          retainedBroadcasterTracks = await createLocalTracks({
-            audio: true,
-            video: { facingMode: 'user' }
-          });
+        const cachedAudio = Array.isArray(retainedBroadcasterTracks)
+          ? retainedBroadcasterTracks.find(t => t.kind === 'audio' && isTrackLive(t))
+          : null;
+
+        let videoTrack = cachedVideo || null;
+        if (!videoTrack) {
+          videoTrack = await createLocalVideoTrack({ facingMode: 'user' });
         }
 
         if (cancelled) {
@@ -80,26 +90,51 @@ function BroadcasterView({ streamId, onEnd }) {
           return;
         }
 
-        for (const track of retainedBroadcasterTracks) {
-          await lkRoom.localParticipant.publishTrack(track);
+        await lkRoom.localParticipant.publishTrack(videoTrack);
+        currentVideoTrack.current = videoTrack;
 
-          if (cancelled) {
-            lkRoom.disconnect(false);
-            return;
-          }
+        if (videoRef.current) {
+          videoTrack.attach(videoRef.current);
+        }
 
-          if (track.kind === 'video') {
-            currentVideoTrack.current = track;
-
-            if (videoRef.current) {
-              track.attach(videoRef.current);
+        let audioTrack = cachedAudio || null;
+        if (!audioTrack) {
+          try {
+            audioTrack = await createLocalAudioTrack();
+          } catch (audioErr) {
+            console.warn('[LiveKit audio init]', audioErr);
+            if (!cancelled) {
+              setMicMuted(true);
+              setMicNotice(
+                audioErr?.name === 'NotAllowedError'
+                  ? 'Microfono non autorizzato: clicca sull’icona del microfono per attivarlo.'
+                  : 'Microfono in attesa: clicca l’icona 🎙️ per attivare l’audio.'
+              );
             }
           }
-
-          if (track.kind === 'audio') {
-            currentAudioTrack.current = track;
-          }
         }
+
+        if (cancelled) {
+          lkRoom.disconnect(false);
+          return;
+        }
+
+        if (audioTrack && isTrackLive(audioTrack)) {
+          await lkRoom.localParticipant.publishTrack(audioTrack);
+          currentAudioTrack.current = audioTrack;
+          await audioTrack.unmute();
+          if (!cancelled) {
+            setMicMuted(false);
+            setMicNotice('');
+          }
+        } else if (!cancelled) {
+          setMicMuted(true);
+        }
+
+        retainedBroadcasterTracks = [
+          ...(videoTrack && isTrackLive(videoTrack) ? [videoTrack] : []),
+          ...(audioTrack && isTrackLive(audioTrack) ? [audioTrack] : [])
+        ];
 
         if (!cancelled) {
           setStatus('live');
@@ -176,11 +211,35 @@ function BroadcasterView({ streamId, onEnd }) {
     }
   }
 
-  // Attiva/disattiva microfono senza richiedere nuovamente i permessi.
+  // Attiva/disattiva microfono (e lo ricrea/pubblica se non ancora attivo).
   async function toggleMic() {
-    if (!currentAudioTrack.current) return;
-
     try {
+      setMicNotice('');
+
+      if (!isTrackLive(currentAudioTrack.current)) {
+        const { createLocalAudioTrack } = await import('livekit-client');
+        const audioTrack = await createLocalAudioTrack();
+
+        currentAudioTrack.current = audioTrack;
+
+        if (Array.isArray(retainedBroadcasterTracks)) {
+          retainedBroadcasterTracks = [
+            ...retainedBroadcasterTracks.filter(t => t.kind !== 'audio'),
+            audioTrack
+          ];
+        } else {
+          retainedBroadcasterTracks = [audioTrack];
+        }
+
+        if (lkRoomRef.current) {
+          await lkRoomRef.current.localParticipant.publishTrack(audioTrack);
+        }
+
+        await audioTrack.unmute();
+        setMicMuted(false);
+        return;
+      }
+
       if (micMuted) {
         await currentAudioTrack.current.unmute();
         setMicMuted(false);
@@ -190,6 +249,12 @@ function BroadcasterView({ streamId, onEnd }) {
       }
     } catch (err) {
       console.error('[toggleMic]', err);
+      setMicMuted(true);
+      setMicNotice(
+        err?.name === 'NotAllowedError'
+          ? 'Permesso microfono bloccato nel browser. Controlla le impostazioni del sito in Chrome.'
+          : 'Impossibile attivare il microfono. Verifica che non sia usato da un’altra app.'
+      );
     }
   }
 
@@ -373,6 +438,18 @@ function BroadcasterView({ streamId, onEnd }) {
           </div>
         )}
       </div>
+
+      {micNotice && (
+        <p style={{
+          maxWidth: 560,
+          margin: '8px auto 0',
+          fontSize: 12,
+          color: '#ffb74d',
+          textAlign: 'center'
+        }}>
+          {micNotice}
+        </p>
+      )}
     </div>
   );
 }
