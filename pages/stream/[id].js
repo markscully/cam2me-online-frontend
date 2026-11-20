@@ -288,7 +288,6 @@ function ViewerPlayer({ streamId }) {
         ref={videoRef}
         autoPlay
         playsInline
-        controls
         style={{
           width: '100%',
           height: 'auto',
