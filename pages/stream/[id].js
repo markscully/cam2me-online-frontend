@@ -11,11 +11,12 @@ const TIP_PRESETS = [10, 25, 50, 100];
 
 // Componente broadcaster LiveKit
 function BroadcasterView({ streamId, onEnd }) {
-  const [room, setRoom] = useState(null);
   const [status, setStatus] = useState('connecting');
   const [facingMode, setFacingMode] = useState('user');
+  const [micMuted, setMicMuted] = useState(false);
   const videoRef = useRef(null);
   const currentVideoTrack = useRef(null);
+  const currentAudioTrack = useRef(null);
   const lkRoomRef = useRef(null);
 
   useEffect(() => {
@@ -26,7 +27,6 @@ function BroadcasterView({ streamId, onEnd }) {
 
         const lkRoom = new Room();
         lkRoomRef.current = lkRoom;
-        setRoom(lkRoom);
 
         lkRoom.on('connected', () => setStatus('live'));
         lkRoom.on('disconnected', () => setStatus('ended'));
@@ -43,10 +43,10 @@ function BroadcasterView({ streamId, onEnd }) {
 
           if (track.kind === 'video') {
             currentVideoTrack.current = track;
-
-            if (videoRef.current) {
-              track.attach(videoRef.current);
-            }
+            if (videoRef.current) track.attach(videoRef.current);
+          }
+          if (track.kind === 'audio') {
+            currentAudioTrack.current = track;
           }
         }
 
@@ -60,29 +60,20 @@ function BroadcasterView({ streamId, onEnd }) {
     start();
 
     return () => {
-      if (lkRoomRef.current) {
-        lkRoomRef.current.disconnect();
-      }
+      if (lkRoomRef.current) lkRoomRef.current.disconnect();
     };
   }, [streamId]);
 
   async function switchCamera() {
     if (!lkRoomRef.current || !currentVideoTrack.current) return;
-
     try {
       const newFacing = facingMode === 'user' ? 'environment' : 'user';
       const { createLocalVideoTrack } = await import('livekit-client');
 
       currentVideoTrack.current.stop();
+      await lkRoomRef.current.localParticipant.unpublishTrack(currentVideoTrack.current);
 
-      await lkRoomRef.current.localParticipant.unpublishTrack(
-        currentVideoTrack.current
-      );
-
-      const newTrack = await createLocalVideoTrack({
-        facingMode: newFacing
-      });
-
+      const newTrack = await createLocalVideoTrack({ facingMode: newFacing });
       await lkRoomRef.current.localParticipant.publishTrack(newTrack);
 
       if (videoRef.current) {
@@ -97,11 +88,18 @@ function BroadcasterView({ streamId, onEnd }) {
     }
   }
 
-  async function handleEnd() {
-    if (lkRoomRef.current) {
-      lkRoomRef.current.disconnect();
+  async function toggleMic() {
+    if (!currentAudioTrack.current) return;
+    if (micMuted) {
+      await currentAudioTrack.current.unmute();
+    } else {
+      await currentAudioTrack.current.mute();
     }
+    setMicMuted(prev => !prev);
+  }
 
+  async function handleEnd() {
+    if (lkRoomRef.current) lkRoomRef.current.disconnect();
     await api.endStream(streamId);
     onEnd();
   }
@@ -134,14 +132,9 @@ function BroadcasterView({ streamId, onEnd }) {
 
         {status === 'connecting' && (
           <div style={{
-            position: 'absolute',
-            inset: 0,
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            color: '#ffb74d',
-            fontSize: 14,
-            background: 'rgba(0,0,0,0.7)'
+            position: 'absolute', inset: 0,
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            color: '#ffb74d', fontSize: 14, background: 'rgba(0,0,0,0.7)'
           }}>
             Connessione in corso...
           </div>
@@ -149,16 +142,10 @@ function BroadcasterView({ streamId, onEnd }) {
 
         {status === 'error' && (
           <div style={{
-            position: 'absolute',
-            inset: 0,
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            color: '#ff6b6b',
-            fontSize: 14,
-            textAlign: 'center',
-            padding: '1rem',
-            background: 'rgba(0,0,0,0.8)'
+            position: 'absolute', inset: 0,
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            color: '#ff6b6b', fontSize: 14, textAlign: 'center',
+            padding: '1rem', background: 'rgba(0,0,0,0.8)'
           }}>
             Errore connessione LiveKit.<br />
             Controlla i permessi della fotocamera.
@@ -167,15 +154,10 @@ function BroadcasterView({ streamId, onEnd }) {
 
         {status === 'live' && (
           <div style={{
-            position: 'absolute',
-            top: 10,
-            left: 10,
-            background: '#e53935',
-            color: '#fff',
-            fontSize: 11,
-            fontWeight: 700,
-            padding: '3px 8px',
-            borderRadius: 4
+            position: 'absolute', top: 10, left: 10,
+            background: '#e53935', color: '#fff',
+            fontSize: 11, fontWeight: 700,
+            padding: '3px 8px', borderRadius: 4
           }}>
             ● LIVE
           </div>
@@ -183,42 +165,47 @@ function BroadcasterView({ streamId, onEnd }) {
 
         {status === 'live' && (
           <div style={{
-            position: 'absolute',
-            bottom: 10,
-            right: 10,
-            display: 'flex',
-            gap: 8
+            position: 'absolute', bottom: 10, right: 10,
+            display: 'flex', gap: 8
           }}>
+            {/* Microfono */}
+            <button
+              onClick={toggleMic}
+              title={micMuted ? 'Attiva microfono' : 'Silenzia microfono'}
+              style={{
+                background: micMuted ? 'rgba(220,50,50,0.8)' : 'rgba(0,0,0,0.6)',
+                border: '1px solid rgba(255,255,255,0.3)',
+                color: '#fff', borderRadius: 6,
+                padding: '8px 12px', fontSize: 18,
+                cursor: 'pointer', lineHeight: 1
+              }}
+            >
+              {micMuted ? '🔇' : '🎙️'}
+            </button>
+
+            {/* Cambia camera */}
             <button
               onClick={switchCamera}
-              title={facingMode === 'user'
-                ? 'Passa a camera posteriore'
-                : 'Passa a camera frontale'}
+              title={facingMode === 'user' ? 'Passa a camera posteriore' : 'Passa a camera frontale'}
               style={{
                 background: 'rgba(0,0,0,0.6)',
                 border: '1px solid rgba(255,255,255,0.3)',
-                color: '#fff',
-                borderRadius: 6,
-                padding: '8px 12px',
-                fontSize: 18,
-                cursor: 'pointer',
-                lineHeight: 1
+                color: '#fff', borderRadius: 6,
+                padding: '8px 12px', fontSize: 18,
+                cursor: 'pointer', lineHeight: 1
               }}
             >
               🔄
             </button>
 
+            {/* Termina */}
             <button
               onClick={handleEnd}
               style={{
-                background: '#c62828',
-                border: 'none',
-                color: '#fff',
-                borderRadius: 6,
-                padding: '8px 14px',
-                fontSize: 13,
-                fontWeight: 600,
-                cursor: 'pointer'
+                background: '#c62828', border: 'none',
+                color: '#fff', borderRadius: 6,
+                padding: '8px 14px', fontSize: 13,
+                fontWeight: 600, cursor: 'pointer'
               }}
             >
               Termina stream
@@ -302,11 +289,7 @@ function ViewerPlayer({ streamId }) {
 
       {/* Pulsante audio — fisso in basso a destra */}
       {status === 'playing' && (
-        <div style={{
-          position: 'absolute',
-          bottom: 14,
-          right: 14,
-        }}>
+        <div style={{ position: 'absolute', bottom: 14, right: 14 }}>
           <button
             onClick={muted ? enableAudio : () => {
               if (audioRef.current) audioRef.current.muted = true;
@@ -330,31 +313,21 @@ function ViewerPlayer({ streamId }) {
       )}
 
       {status === 'connecting' && (
-        <p style={{ color: '#ffb74d', fontSize: 13 }}>
-          Connessione allo stream...
-        </p>
+        <p style={{ color: '#ffb74d', fontSize: 13 }}>Connessione allo stream...</p>
       )}
-
       {status === 'waiting' && (
-        <p style={{ color: '#888', fontSize: 13 }}>
-          In attesa del broadcaster...
-        </p>
+        <p style={{ color: '#888', fontSize: 13 }}>In attesa del broadcaster...</p>
       )}
-
       {status === 'offline' && (
-        <p style={{ color: '#888', fontSize: 13 }}>
-          Lo stream è terminato.
-        </p>
+        <p style={{ color: '#888', fontSize: 13 }}>Lo stream è terminato.</p>
       )}
-
       {status === 'error' && (
-        <p className="error-text" style={{ fontSize: 13 }}>
-          Errore connessione.
-        </p>
+        <p className="error-text" style={{ fontSize: 13 }}>Errore connessione.</p>
       )}
     </div>
   );
 }
+
 export default function StreamPage() {
   const router = useRouter();
   const { id, broadcaster: isBroadcasterParam } = router.query;
@@ -384,23 +357,14 @@ export default function StreamPage() {
     if (!id) return;
 
     api.getStream(id)
-      .then(s => {
-        setStream(s);
-        setViewers(s.viewers);
-      })
+      .then(s => { setStream(s); setViewers(s.viewers); })
       .catch(err => setError(err.message));
 
-    api.getMessages(id)
-      .then(setMessages)
-      .catch(() => {});
+    api.getMessages(id).then(setMessages).catch(() => {});
 
     const interval = setInterval(() => {
       api.getStream(id)
-        .then(s => {
-          setStream(prev =>
-            prev ? { ...prev, is_live: s.is_live } : s
-          );
-        })
+        .then(s => setStream(prev => prev ? { ...prev, is_live: s.is_live } : s))
         .catch(() => {});
     }, 10000);
 
@@ -410,31 +374,15 @@ export default function StreamPage() {
   useEffect(() => {
     if (!id || !user) return;
 
-    const socket = io(API_URL, {
-      auth: { token }
-    });
-
+    const socket = io(API_URL, { auth: { token } });
     socketRef.current = socket;
 
     socket.on('connect', () => socket.emit('join_stream', id));
-
-    socket.on('chat_message', msg =>
-      setMessages(prev => [...prev, msg])
-    );
-
+    socket.on('chat_message', msg => setMessages(prev => [...prev, msg]));
     socket.on('viewer_count', count => setViewers(count));
-
-    socket.on('balance_update', ({ balance }) =>
-      setBalanceDirect(balance)
-    );
-
-    socket.on('tip_error', ({ error }) => {
-      setTipError(error);
-      setTipSending(false);
-    });
-
+    socket.on('balance_update', ({ balance }) => setBalanceDirect(balance));
+    socket.on('tip_error', ({ error }) => { setTipError(error); setTipSending(false); });
     socket.on('stream_offline', () => router.push('/'));
-
     socket.on('chat_error', ({ error }) => {
       setChatError(error);
       setTimeout(() => setChatError(''), 5000);
@@ -444,45 +392,28 @@ export default function StreamPage() {
   }, [id, user, setBalanceDirect]);
 
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({
-      behavior: 'smooth'
-    });
+    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
 
   function sendMessage(e) {
     e.preventDefault();
-
     if (!input.trim() || !socketRef.current) return;
-
-    socketRef.current.emit('chat_message', {
-      streamId: id,
-      message: input
-    });
-
+    socketRef.current.emit('chat_message', { streamId: id, message: input });
     setInput('');
   }
 
   function sendTip(amount) {
     if (!socketRef.current) return;
-
     setTipError('');
     setTipSending(true);
-
-    socketRef.current.emit('send_tip', {
-      streamId: id,
-      amount
-    });
-
+    socketRef.current.emit('send_tip', { streamId: id, amount });
     setTimeout(() => setTipSending(false), 600);
   }
 
   if (!stream) {
     return (
-      <div>
-        <Navbar />
-        <div className="container">
-          <p>Caricamento...</p>
-        </div>
+      <div><Navbar />
+        <div className="container"><p>Caricamento...</p></div>
       </div>
     );
   }
@@ -490,58 +421,27 @@ export default function StreamPage() {
   return (
     <div>
       <Navbar />
-
       <div className="container">
         {error && <p className="error-text">{error}</p>}
 
-        <h1 style={{
-          fontSize: 20,
-          margin: '0 0 4px'
-        }}>
-          {stream.title}
-        </h1>
+        <h1 style={{ fontSize: 20, margin: '0 0 4px' }}>{stream.title}</h1>
 
         <p style={{
-          color: '#888',
-          fontSize: 13,
-          margin: '0 0 12px',
-          display: 'flex',
-          alignItems: 'center',
-          gap: 10,
-          flexWrap: 'wrap'
+          color: '#888', fontSize: 13, margin: '0 0 12px',
+          display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap'
         }}>
-          {/* Nome broadcaster cliccabile */}
-          <Link
-            href={`/profile/${stream.broadcaster}`}
-            style={{ color: '#a78bfa', textDecoration: 'none', fontWeight: 500 }}
-          >
+          <Link href={`/profile/${stream.broadcaster}`}
+            style={{ color: '#a78bfa', textDecoration: 'none', fontWeight: 500 }}>
             @{stream.broadcaster}
           </Link>
-
-          {stream.category && (
-            <span style={{ color: '#6a3de8' }}>
-              {stream.category}
-            </span>
-          )}
-
+          {stream.category && <span style={{ color: '#6a3de8' }}>{stream.category}</span>}
           <span>&mdash; {viewers} spettatori</span>
-
-          {stream.is_live && (
-            <span style={{ color: '#e53935' }}>
-              ● LIVE
-            </span>
-          )}
-
-          {user && !isBroadcaster && (
-            <ReportButton streamId={id} token={token} />
-          )}
+          {stream.is_live && <span style={{ color: '#e53935' }}>● LIVE</span>}
+          {user && !isBroadcaster && <ReportButton streamId={id} token={token} />}
         </p>
 
         {isBroadcaster ? (
-          <BroadcasterView
-            streamId={id}
-            onEnd={() => router.push('/')}
-          />
+          <BroadcasterView streamId={id} onEnd={() => router.push('/')} />
         ) : (
           <ViewerPlayer streamId={id} />
         )}
@@ -550,20 +450,10 @@ export default function StreamPage() {
         {user && !isBroadcaster && (
           <div className="card" style={{ margin: '1rem 0' }}>
             <strong>Supporta il creator 🪙</strong>
-
-            <p style={{
-              fontSize: 12,
-              color: '#888',
-              margin: '4px 0 8px'
-            }}>
+            <p style={{ fontSize: 12, color: '#888', margin: '4px 0 8px' }}>
               Saldo: {balance} token
             </p>
-
-            <div style={{
-              display: 'flex',
-              gap: '0.5rem',
-              flexWrap: 'wrap'
-            }}>
+            <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
               {TIP_PRESETS.map(amount => (
                 <button
                   key={amount}
@@ -575,28 +465,14 @@ export default function StreamPage() {
                 </button>
               ))}
             </div>
-
             {tipError && (
-              <p className="error-text" style={{
-                fontSize: 12,
-                margin: '4px 0 0'
-              }}>
+              <p className="error-text" style={{ fontSize: 12, margin: '4px 0 0' }}>
                 {tipError}
               </p>
             )}
-
             {balance < 10 && (
-              <p style={{
-                fontSize: 12,
-                color: '#666',
-                marginTop: 6
-              }}>
-                <a
-                  href="/tokens"
-                  style={{ color: '#a78bfa' }}
-                >
-                  Acquista token →
-                </a>
+              <p style={{ fontSize: 12, color: '#666', marginTop: 6 }}>
+                <a href="/tokens" style={{ color: '#a78bfa' }}>Acquista token →</a>
               </p>
             )}
           </div>
@@ -606,30 +482,19 @@ export default function StreamPage() {
         <div className="chat-box">
           <div className="chat-messages">
             {messages.map(m => (
-              <div
-                key={m.id}
-                className={`msg${m.is_tip ? ' tip' : ''}`}
-              >
-                {m.is_tip
-                  ? (
-                    <span>
-                      🪙 <span className="username">
-                        {m.username}
-                      </span> {m.message}
-                    </span>
-                  )
-                  : (
-                    <>
-                      <span className="username">
-                        {m.username}:
-                      </span>
-                      <span>{m.message}</span>
-                    </>
-                  )
-                }
+              <div key={m.id} className={`msg${m.is_tip ? ' tip' : ''}`}>
+                {m.is_tip ? (
+                  <span>
+                    🪙 <span className="username">{m.username}</span> {m.message}
+                  </span>
+                ) : (
+                  <>
+                    <span className="username">{m.username}: </span>
+                    <span>{m.message}</span>
+                  </>
+                )}
               </div>
             ))}
-
             <div ref={messagesEndRef} />
           </div>
 
@@ -637,43 +502,24 @@ export default function StreamPage() {
             <>
               {chatError && (
                 <p style={{
-                  padding: '0.4rem 0.75rem',
-                  fontSize: 12,
-                  color: '#e74c3c',
-                  background: '#1a0a0a',
-                  margin: 0
+                  padding: '0.4rem 0.75rem', fontSize: 12,
+                  color: '#e74c3c', background: '#1a0a0a', margin: 0
                 }}>
                   {chatError}
                 </p>
               )}
-
-              <form
-                className="chat-input"
-                onSubmit={sendMessage}
-              >
+              <form className="chat-input" onSubmit={sendMessage}>
                 <input
                   value={input}
                   onChange={e => setInput(e.target.value)}
                   placeholder="Scrivi un messaggio..."
                 />
-
-                <button type="submit">
-                  Invia
-                </button>
+                <button type="submit">Invia</button>
               </form>
             </>
           ) : (
-            <p style={{
-              padding: '0.5rem',
-              fontSize: 13,
-              color: '#666'
-            }}>
-              <a
-                href="/login"
-                style={{ color: '#a78bfa' }}
-              >
-                Accedi
-              </a> per partecipare alla chat.
+            <p style={{ padding: '0.5rem', fontSize: 13, color: '#666' }}>
+              <a href="/login" style={{ color: '#a78bfa' }}>Accedi</a> per partecipare alla chat.
             </p>
           )}
         </div>
