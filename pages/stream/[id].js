@@ -1,3 +1,4 @@
+
 import { useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/router';
 import { io } from 'socket.io-client';
@@ -9,71 +10,149 @@ import ReportButton from '../../components/ReportButton';
 
 const TIP_PRESETS = [10, 25, 50, 100];
 
+// Conserva le tracce tra le navigazioni interne di Cam2Me.
+// In questo modo webcam e microfono possono essere riutilizzati
+// quando il broadcaster rientra nella pagina.
+let retainedBroadcasterTracks = null;
+
 // Componente broadcaster LiveKit
 function BroadcasterView({ streamId, onEnd }) {
   const [status, setStatus] = useState('connecting');
   const [facingMode, setFacingMode] = useState('user');
   const [micMuted, setMicMuted] = useState(false);
+
   const videoRef = useRef(null);
   const currentVideoTrack = useRef(null);
   const currentAudioTrack = useRef(null);
   const lkRoomRef = useRef(null);
 
   useEffect(() => {
+    let cancelled = false;
+    let localRoom = null;
+
     async function start() {
       try {
         const { Room, createLocalTracks } = await import('livekit-client');
-        const { token, livekitUrl } = await api.getBroadcasterToken(streamId);
+
+        const { token, livekitUrl } =
+          await api.getBroadcasterToken(streamId);
+
+        if (cancelled) return;
 
         const lkRoom = new Room();
+        localRoom = lkRoom;
         lkRoomRef.current = lkRoom;
 
-        lkRoom.on('connected', () => setStatus('live'));
-        lkRoom.on('disconnected', () => setStatus('ended'));
+        lkRoom.on('connected', () => {
+          if (!cancelled) setStatus('live');
+        });
+
+        lkRoom.on('disconnected', () => {
+          if (!cancelled) setStatus('ended');
+        });
 
         await lkRoom.connect(livekitUrl, token);
 
-        const tracks = await createLocalTracks({
-          audio: true,
-          video: { facingMode: 'user' }
-        });
+        if (cancelled) {
+          lkRoom.disconnect(false);
+          return;
+        }
 
-        for (const track of tracks) {
+        // Verifica se esistono già tracce ancora attive.
+        const tracksUsable =
+          Array.isArray(retainedBroadcasterTracks) &&
+          retainedBroadcasterTracks.length > 0 &&
+          retainedBroadcasterTracks.every(track =>
+            track.mediaStreamTrack &&
+            track.mediaStreamTrack.readyState === 'live'
+          );
+
+        // Acquisisce webcam e microfono solo se necessario.
+        if (!tracksUsable) {
+          retainedBroadcasterTracks = await createLocalTracks({
+            audio: true,
+            video: { facingMode: 'user' }
+          });
+        }
+
+        if (cancelled) {
+          lkRoom.disconnect(false);
+          return;
+        }
+
+        for (const track of retainedBroadcasterTracks) {
           await lkRoom.localParticipant.publishTrack(track);
+
+          if (cancelled) {
+            lkRoom.disconnect(false);
+            return;
+          }
 
           if (track.kind === 'video') {
             currentVideoTrack.current = track;
-            if (videoRef.current) track.attach(videoRef.current);
+
+            if (videoRef.current) {
+              track.attach(videoRef.current);
+            }
           }
+
           if (track.kind === 'audio') {
             currentAudioTrack.current = track;
           }
         }
 
-        setStatus('live');
+        if (!cancelled) {
+          setStatus('live');
+        }
+
       } catch (err) {
         console.error('[LiveKit broadcaster]', err);
-        setStatus('error');
+
+        if (!cancelled) {
+          setStatus('error');
+        }
+
+        if (localRoom) {
+          localRoom.disconnect(false);
+        }
       }
     }
 
     start();
 
     return () => {
-      if (lkRoomRef.current) lkRoomRef.current.disconnect();
+      cancelled = true;
+
+      // Disconnette la stanza LiveKit ma NON ferma le tracce.
+      // Se si rientra nella pagina, potranno essere riutilizzate.
+      if (lkRoomRef.current) {
+        lkRoomRef.current.disconnect(false);
+        lkRoomRef.current = null;
+      }
     };
   }, [streamId]);
 
+  // Cambio fotocamera
   async function switchCamera() {
     if (!lkRoomRef.current || !currentVideoTrack.current) return;
+
     try {
-      const newFacing = facingMode === 'user' ? 'environment' : 'user';
-      const { createLocalVideoTrack } = await import('livekit-client');
+      const newFacing =
+        facingMode === 'user' ? 'environment' : 'user';
 
-      currentVideoTrack.current.stop();
-      await lkRoomRef.current.localParticipant.unpublishTrack(currentVideoTrack.current);
+      const { createLocalVideoTrack } =
+        await import('livekit-client');
 
-      const newTrack = await createLocalVideoTrack({ facingMode: newFacing });
+      const oldTrack = currentVideoTrack.current;
+
+      await lkRoomRef.current.localParticipant.unpublishTrack(oldTrack);
+
+      oldTrack.stop();
+
+      const newTrack = await createLocalVideoTrack({
+        facingMode: newFacing
+      });
+
       await lkRoomRef.current.localParticipant.publishTrack(newTrack);
 
       if (videoRef.current) {
@@ -82,26 +161,69 @@ function BroadcasterView({ streamId, onEnd }) {
       }
 
       currentVideoTrack.current = newTrack;
+
+      // Aggiorna la cache con la nuova fotocamera.
+      if (Array.isArray(retainedBroadcasterTracks)) {
+        retainedBroadcasterTracks = retainedBroadcasterTracks.map(track =>
+          track.kind === 'video' ? newTrack : track
+        );
+      }
+
       setFacingMode(newFacing);
+
     } catch (err) {
       console.error('[switchCamera]', err);
     }
   }
 
+  // Attiva/disattiva microfono senza richiedere nuovamente i permessi.
   async function toggleMic() {
     if (!currentAudioTrack.current) return;
-    if (micMuted) {
-      await currentAudioTrack.current.unmute();
-    } else {
-      await currentAudioTrack.current.mute();
+
+    try {
+      if (micMuted) {
+        await currentAudioTrack.current.unmute();
+        setMicMuted(false);
+      } else {
+        await currentAudioTrack.current.mute();
+        setMicMuted(true);
+      }
+    } catch (err) {
+      console.error('[toggleMic]', err);
     }
-    setMicMuted(prev => !prev);
   }
 
+  // Termina definitivamente la diretta.
   async function handleEnd() {
-    if (lkRoomRef.current) lkRoomRef.current.disconnect();
-    await api.endStream(streamId);
-    onEnd();
+    try {
+      if (lkRoomRef.current) {
+        lkRoomRef.current.disconnect(true);
+        lkRoomRef.current = null;
+      }
+
+      // Rilascia webcam e microfono.
+      if (Array.isArray(retainedBroadcasterTracks)) {
+        retainedBroadcasterTracks.forEach(track => {
+          try {
+            track.stop();
+          } catch (err) {
+            console.warn('[track cleanup]', err);
+          }
+        });
+      }
+
+      retainedBroadcasterTracks = null;
+
+      currentVideoTrack.current = null;
+      currentAudioTrack.current = null;
+
+      await api.endStream(streamId);
+
+      onEnd();
+
+    } catch (err) {
+      console.error('[handleEnd]', err);
+    }
   }
 
   return (
@@ -132,9 +254,14 @@ function BroadcasterView({ streamId, onEnd }) {
 
         {status === 'connecting' && (
           <div style={{
-            position: 'absolute', inset: 0,
-            display: 'flex', alignItems: 'center', justifyContent: 'center',
-            color: '#ffb74d', fontSize: 14, background: 'rgba(0,0,0,0.7)'
+            position: 'absolute',
+            inset: 0,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            color: '#ffb74d',
+            fontSize: 14,
+            background: 'rgba(0,0,0,0.7)'
           }}>
             Connessione in corso...
           </div>
@@ -142,22 +269,33 @@ function BroadcasterView({ streamId, onEnd }) {
 
         {status === 'error' && (
           <div style={{
-            position: 'absolute', inset: 0,
-            display: 'flex', alignItems: 'center', justifyContent: 'center',
-            color: '#ff6b6b', fontSize: 14, textAlign: 'center',
-            padding: '1rem', background: 'rgba(0,0,0,0.8)'
+            position: 'absolute',
+            inset: 0,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            color: '#ff6b6b',
+            fontSize: 14,
+            textAlign: 'center',
+            padding: '1rem',
+            background: 'rgba(0,0,0,0.8)'
           }}>
             Errore connessione LiveKit.<br />
-            Controlla i permessi della fotocamera.
+            Controlla i permessi della fotocamera e del microfono.
           </div>
         )}
 
         {status === 'live' && (
           <div style={{
-            position: 'absolute', top: 10, left: 10,
-            background: '#e53935', color: '#fff',
-            fontSize: 11, fontWeight: 700,
-            padding: '3px 8px', borderRadius: 4
+            position: 'absolute',
+            top: 10,
+            left: 10,
+            background: '#e53935',
+            color: '#fff',
+            fontSize: 11,
+            fontWeight: 700,
+            padding: '3px 8px',
+            borderRadius: 4
           }}>
             ● LIVE
           </div>
@@ -165,19 +303,28 @@ function BroadcasterView({ streamId, onEnd }) {
 
         {status === 'live' && (
           <div style={{
-            position: 'absolute', bottom: 10, right: 10,
-            display: 'flex', gap: 8
+            position: 'absolute',
+            bottom: 10,
+            right: 10,
+            display: 'flex',
+            gap: 8
           }}>
             {/* Microfono */}
             <button
+              type="button"
               onClick={toggleMic}
               title={micMuted ? 'Attiva microfono' : 'Silenzia microfono'}
               style={{
-                background: micMuted ? 'rgba(220,50,50,0.8)' : 'rgba(0,0,0,0.6)',
+                background: micMuted
+                  ? 'rgba(220,50,50,0.8)'
+                  : 'rgba(0,0,0,0.6)',
                 border: '1px solid rgba(255,255,255,0.3)',
-                color: '#fff', borderRadius: 6,
-                padding: '8px 12px', fontSize: 18,
-                cursor: 'pointer', lineHeight: 1
+                color: '#fff',
+                borderRadius: 6,
+                padding: '8px 12px',
+                fontSize: 18,
+                cursor: 'pointer',
+                lineHeight: 1
               }}
             >
               {micMuted ? '🔇' : '🎙️'}
@@ -185,14 +332,22 @@ function BroadcasterView({ streamId, onEnd }) {
 
             {/* Cambia camera */}
             <button
+              type="button"
               onClick={switchCamera}
-              title={facingMode === 'user' ? 'Passa a camera posteriore' : 'Passa a camera frontale'}
+              title={
+                facingMode === 'user'
+                  ? 'Passa a camera posteriore'
+                  : 'Passa a camera frontale'
+              }
               style={{
                 background: 'rgba(0,0,0,0.6)',
                 border: '1px solid rgba(255,255,255,0.3)',
-                color: '#fff', borderRadius: 6,
-                padding: '8px 12px', fontSize: 18,
-                cursor: 'pointer', lineHeight: 1
+                color: '#fff',
+                borderRadius: 6,
+                padding: '8px 12px',
+                fontSize: 18,
+                cursor: 'pointer',
+                lineHeight: 1
               }}
             >
               🔄
@@ -200,12 +355,17 @@ function BroadcasterView({ streamId, onEnd }) {
 
             {/* Termina */}
             <button
+              type="button"
               onClick={handleEnd}
               style={{
-                background: '#c62828', border: 'none',
-                color: '#fff', borderRadius: 6,
-                padding: '8px 14px', fontSize: 13,
-                fontWeight: 600, cursor: 'pointer'
+                background: '#c62828',
+                border: 'none',
+                color: '#fff',
+                borderRadius: 6,
+                padding: '8px 14px',
+                fontSize: 13,
+                fontWeight: 600,
+                cursor: 'pointer'
               }}
             >
               Termina stream
@@ -222,114 +382,227 @@ function ViewerPlayer({ streamId }) {
   const [status, setStatus] = useState('connecting');
   const [muted, setMuted] = useState(true);
   const [isFullscreen, setIsFullscreen] = useState(false);
+
   const videoRef = useRef(null);
   const audioRef = useRef(null);
   const containerRef = useRef(null);
 
   useEffect(() => {
     let lkRoom;
+    let cancelled = false;
 
     async function start() {
       try {
         const { Room } = await import('livekit-client');
-        const { token, livekitUrl } = await api.getViewerToken(streamId);
 
-        // audioCaptureDefaults e videoCaptureDefaults disabilitati:
-        // il viewer non chiede mai permessi microfono/camera
+        const { token, livekitUrl } =
+          await api.getViewerToken(streamId);
+
+        if (cancelled) return;
+
         lkRoom = new Room({
-          audioCaptureDefaults: { autoGainControl: false, echoCancellation: false, noiseSuppression: false },
-          publishDefaults: { simulcast: false },
+          audioCaptureDefaults: {
+            autoGainControl: false,
+            echoCancellation: false,
+            noiseSuppression: false
+          },
+          publishDefaults: {
+            simulcast: false
+          }
         });
 
         lkRoom.on('trackSubscribed', (track) => {
+          if (cancelled) return;
+
           if (track.kind === 'video' && videoRef.current) {
             track.attach(videoRef.current);
             setStatus('playing');
           }
+
           if (track.kind === 'audio' && audioRef.current) {
             track.attach(audioRef.current);
           }
         });
 
-        lkRoom.on('disconnected', () => setStatus('offline'));
-        lkRoom.on('connected', () => setStatus('waiting'));
-
-        // connect senza acquisire media locali
-        await lkRoom.connect(livekitUrl, token, {
-          autoSubscribe: true,
+        lkRoom.on('disconnected', () => {
+          if (!cancelled) setStatus('offline');
         });
+
+        lkRoom.on('connected', () => {
+          if (!cancelled) setStatus('waiting');
+        });
+
+        await lkRoom.connect(livekitUrl, token, {
+          autoSubscribe: true
+        });
+
       } catch (err) {
         console.error('[LiveKit viewer]', err);
-        setStatus('error');
+
+        if (!cancelled) {
+          setStatus('error');
+        }
       }
     }
 
     start();
 
     return () => {
-      if (lkRoom) lkRoom.disconnect();
+      cancelled = true;
+
+      if (lkRoom) {
+        lkRoom.disconnect();
+      }
     };
   }, [streamId]);
 
-  // Fullscreen listener (webkit per Safari/iOS)
+  // Gestione fullscreen standard e WebKit.
   useEffect(() => {
     function onFsChange() {
-      setIsFullscreen(!!(document.fullscreenElement || document.webkitFullscreenElement));
+      const fullscreenActive = !!(
+        document.fullscreenElement ||
+        document.webkitFullscreenElement ||
+        videoRef.current?.webkitDisplayingFullscreen
+      );
+
+      setIsFullscreen(fullscreenActive);
     }
+
     document.addEventListener('fullscreenchange', onFsChange);
     document.addEventListener('webkitfullscreenchange', onFsChange);
+
+    const video = videoRef.current;
+
+    // Eventi fullscreen video per dispositivi WebKit.
+    if (video) {
+      video.addEventListener('webkitbeginfullscreen', onFsChange);
+      video.addEventListener('webkitendfullscreen', onFsChange);
+    }
+
     return () => {
       document.removeEventListener('fullscreenchange', onFsChange);
       document.removeEventListener('webkitfullscreenchange', onFsChange);
+
+      if (video) {
+        video.removeEventListener('webkitbeginfullscreen', onFsChange);
+        video.removeEventListener('webkitendfullscreen', onFsChange);
+      }
     };
   }, []);
 
-  function enableAudio() {
+  // Attiva audio dopo il clic dell'utente.
+  async function enableAudio() {
     if (audioRef.current) {
-      audioRef.current.muted = false;
-      audioRef.current.play().catch(() => {});
+      try {
+        audioRef.current.muted = false;
+        await audioRef.current.play();
+        setMuted(false);
+      } catch (err) {
+        console.error('[enableAudio]', err);
+      }
     }
-    setMuted(false);
   }
 
-  function toggleFullscreen() {
-    if (!document.fullscreenElement) {
-      const el = containerRef.current || videoRef.current;
-      if (!el) return;
-      (el.requestFullscreen || el.webkitRequestFullscreen || el.mozRequestFullScreen)
-        ? (el.requestFullscreen?.() || el.webkitRequestFullscreen?.() || el.mozRequestFullScreen?.())
-        : null;
-    } else {
-      (document.exitFullscreen || document.webkitExitFullscreen || document.mozCancelFullScreen)
-        ? (document.exitFullscreen?.() || document.webkitExitFullscreen?.() || document.mozCancelFullScreen?.())
-        : null;
+  // Fullscreen viewer.
+  async function toggleFullscreen() {
+    const el = containerRef.current;
+
+    if (!el) return;
+
+    const video = videoRef.current;
+
+    try {
+      const fullscreenElement =
+        document.fullscreenElement ||
+        document.webkitFullscreenElement;
+
+      if (fullscreenElement) {
+        if (document.exitFullscreen) {
+          await document.exitFullscreen();
+        } else if (document.webkitExitFullscreen) {
+          document.webkitExitFullscreen();
+        }
+
+        return;
+      }
+
+      // API standard Chrome, Edge e browser moderni.
+      if (el.requestFullscreen) {
+        await el.requestFullscreen();
+        return;
+      }
+
+      // Fallback WebKit.
+      if (el.webkitRequestFullscreen) {
+        el.webkitRequestFullscreen();
+        return;
+      }
+
+      // Fallback per fullscreen del video su dispositivi mobili.
+      if (video && video.webkitEnterFullscreen) {
+        video.webkitEnterFullscreen();
+        return;
+      }
+
+      console.warn('[fullscreen] API non supportata');
+
+    } catch (err) {
+      console.error('[fullscreen]', err);
     }
   }
 
   return (
-    <div ref={containerRef} style={{ position: 'relative', background: '#000', borderRadius: 8, overflow: 'hidden' }}>
+    <div
+      ref={containerRef}
+      style={{
+        position: 'relative',
+        background: '#000',
+        borderRadius: isFullscreen ? 0 : 8,
+        overflow: 'hidden',
+        width: isFullscreen ? '100vw' : '100%',
+        height: isFullscreen ? '100vh' : 'auto',
+        display: isFullscreen ? 'flex' : 'block',
+        alignItems: 'center',
+        justifyContent: 'center'
+      }}
+    >
       <video
         ref={videoRef}
         autoPlay
         playsInline
         style={{
           width: '100%',
-          height: 'auto',
+          height: isFullscreen ? '100%' : 'auto',
           display: 'block',
           maxHeight: isFullscreen ? '100vh' : '72vh',
           objectFit: 'contain',
           background: '#000'
         }}
       />
-      <audio ref={audioRef} autoPlay muted />
 
-      {/* Pulsanti sovrapposti in basso a destra */}
+      <audio
+        ref={audioRef}
+        autoPlay
+        muted
+      />
+
+      {/* Pulsanti sovrapposti */}
       {status === 'playing' && (
-        <div style={{ position: 'absolute', bottom: 14, right: 14, display: 'flex', gap: 8 }}>
+        <div style={{
+          position: 'absolute',
+          bottom: 14,
+          right: 14,
+          display: 'flex',
+          gap: 8,
+          zIndex: 10
+        }}>
           {/* Audio */}
           <button
+            type="button"
             onClick={muted ? enableAudio : () => {
-              if (audioRef.current) audioRef.current.muted = true;
+              if (audioRef.current) {
+                audioRef.current.muted = true;
+              }
               setMuted(true);
             }}
             style={{
@@ -349,6 +622,7 @@ function ViewerPlayer({ streamId }) {
 
           {/* Fullscreen */}
           <button
+            type="button"
             onClick={toggleFullscreen}
             style={{
               background: 'rgba(0,0,0,0.6)',
@@ -360,7 +634,11 @@ function ViewerPlayer({ streamId }) {
               cursor: 'pointer',
               lineHeight: 1
             }}
-            title={isFullscreen ? 'Esci da schermo intero' : 'Schermo intero'}
+            title={
+              isFullscreen
+                ? 'Esci da schermo intero'
+                : 'Schermo intero'
+            }
           >
             {isFullscreen ? '✕' : '⛶'}
           </button>
@@ -368,16 +646,42 @@ function ViewerPlayer({ streamId }) {
       )}
 
       {status === 'connecting' && (
-        <p style={{ color: '#ffb74d', fontSize: 13, padding: '0.5rem' }}>Connessione allo stream...</p>
+        <p style={{
+          color: '#ffb74d',
+          fontSize: 13,
+          padding: '0.5rem'
+        }}>
+          Connessione allo stream...
+        </p>
       )}
+
       {status === 'waiting' && (
-        <p style={{ color: '#888', fontSize: 13, padding: '0.5rem' }}>In attesa del broadcaster...</p>
+        <p style={{
+          color: '#888',
+          fontSize: 13,
+          padding: '0.5rem'
+        }}>
+          In attesa del broadcaster...
+        </p>
       )}
+
       {status === 'offline' && (
-        <p style={{ color: '#888', fontSize: 13, padding: '0.5rem' }}>Lo stream è terminato.</p>
+        <p style={{
+          color: '#888',
+          fontSize: 13,
+          padding: '0.5rem'
+        }}>
+          Lo stream è terminato.
+        </p>
       )}
+
       {status === 'error' && (
-        <p className="error-text" style={{ fontSize: 13, padding: '0.5rem' }}>Errore connessione.</p>
+        <p className="error-text" style={{
+          fontSize: 13,
+          padding: '0.5rem'
+        }}>
+          Errore connessione.
+        </p>
       )}
     </div>
   );
@@ -385,7 +689,9 @@ function ViewerPlayer({ streamId }) {
 
 export default function StreamPage() {
   const router = useRouter();
+
   const { id, broadcaster: isBroadcasterParam } = router.query;
+
   const { user, balance, setBalanceDirect } = useAuth();
 
   const [stream, setStream] = useState(null);
@@ -408,67 +714,123 @@ export default function StreamPage() {
     ? localStorage.getItem('token')
     : null;
 
+  // Caricamento stream e messaggi.
   useEffect(() => {
     if (!id) return;
 
     api.getStream(id)
-      .then(s => { setStream(s); setViewers(s.viewers); })
+      .then(s => {
+        setStream(s);
+        setViewers(s.viewers);
+      })
       .catch(err => setError(err.message));
 
-    api.getMessages(id).then(setMessages).catch(() => {});
+    api.getMessages(id)
+      .then(setMessages)
+      .catch(() => {});
 
     const interval = setInterval(() => {
       api.getStream(id)
-        .then(s => setStream(prev => prev ? { ...prev, is_live: s.is_live } : s))
+        .then(s => {
+          setStream(prev =>
+            prev ? { ...prev, is_live: s.is_live } : s
+          );
+        })
         .catch(() => {});
     }, 10000);
 
     return () => clearInterval(interval);
   }, [id]);
 
+  // Socket.IO.
   useEffect(() => {
     if (!id || !user) return;
 
-    const socket = io(API_URL, { auth: { token } });
+    const socket = io(API_URL, {
+      auth: { token }
+    });
+
     socketRef.current = socket;
 
-    socket.on('connect', () => socket.emit('join_stream', id));
-    socket.on('chat_message', msg => setMessages(prev => [...prev, msg]));
-    socket.on('viewer_count', count => setViewers(count));
-    socket.on('balance_update', ({ balance }) => setBalanceDirect(balance));
-    socket.on('tip_error', ({ error }) => { setTipError(error); setTipSending(false); });
-    socket.on('stream_offline', () => router.push('/'));
+    socket.on('connect', () => {
+      socket.emit('join_stream', id);
+    });
+
+    socket.on('chat_message', msg => {
+      setMessages(prev => [...prev, msg]);
+    });
+
+    socket.on('viewer_count', count => {
+      setViewers(count);
+    });
+
+    socket.on('balance_update', ({ balance }) => {
+      setBalanceDirect(balance);
+    });
+
+    socket.on('tip_error', ({ error }) => {
+      setTipError(error);
+      setTipSending(false);
+    });
+
+    socket.on('stream_offline', () => {
+      router.push('/');
+    });
+
     socket.on('chat_error', ({ error }) => {
       setChatError(error);
       setTimeout(() => setChatError(''), 5000);
     });
 
-    return () => socket.disconnect();
+    return () => {
+      socket.disconnect();
+    };
   }, [id, user, setBalanceDirect]);
 
+  // Scroll automatico chat.
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    messagesEndRef.current?.scrollIntoView({
+      behavior: 'smooth'
+    });
   }, [messages]);
 
+  // Invio messaggio chat.
   function sendMessage(e) {
     e.preventDefault();
+
     if (!input.trim() || !socketRef.current) return;
-    socketRef.current.emit('chat_message', { streamId: id, message: input });
+
+    socketRef.current.emit('chat_message', {
+      streamId: id,
+      message: input
+    });
+
     setInput('');
   }
 
+  // Invio token.
   function sendTip(amount) {
     if (!socketRef.current) return;
+
     setTipError('');
     setTipSending(true);
-    socketRef.current.emit('send_tip', { streamId: id, amount });
+
+    socketRef.current.emit('send_tip', {
+      streamId: id,
+      amount
+    });
+
     setTimeout(() => setTipSending(false), 600);
   }
 
   if (!stream) {
     return (
-      <div><Navbar />
-        <div className="container"><p>Caricamento...</p></div>
+      <div>
+        <Navbar />
+
+        <div className="container">
+          <p>Caricamento...</p>
+        </div>
       </div>
     );
   }
@@ -476,39 +838,94 @@ export default function StreamPage() {
   return (
     <div>
       <Navbar />
-      <div className="container">
-        {error && <p className="error-text">{error}</p>}
 
-        <h1 style={{ fontSize: 20, margin: '0 0 4px' }}>{stream.title}</h1>
+      <div className="container">
+        {error && (
+          <p className="error-text">{error}</p>
+        )}
+
+        <h1 style={{
+          fontSize: 20,
+          margin: '0 0 4px'
+        }}>
+          {stream.title}
+        </h1>
 
         <p style={{
-          color: '#888', fontSize: 13, margin: '0 0 12px',
-          display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap'
+          color: '#888',
+          fontSize: 13,
+          margin: '0 0 12px',
+          display: 'flex',
+          alignItems: 'center',
+          gap: 10,
+          flexWrap: 'wrap'
         }}>
-          <Link href={`/profile/${stream.broadcaster}`}
-            style={{ color: '#a78bfa', textDecoration: 'none', fontWeight: 500 }}>
+          <Link
+            href={`/profile/${stream.broadcaster}`}
+            style={{
+              color: '#a78bfa',
+              textDecoration: 'none',
+              fontWeight: 500
+            }}
+          >
             @{stream.broadcaster}
           </Link>
-          {stream.category && <span style={{ color: '#6a3de8' }}>{stream.category}</span>}
-          <span>&mdash; {viewers} spettatori</span>
-          {stream.is_live && <span style={{ color: '#e53935' }}>● LIVE</span>}
-          {user && !isBroadcaster && <ReportButton streamId={id} token={token} />}
+
+          {stream.category && (
+            <span style={{ color: '#6a3de8' }}>
+              {stream.category}
+            </span>
+          )}
+
+          <span>
+            &mdash; {viewers} spettatori
+          </span>
+
+          {stream.is_live && (
+            <span style={{ color: '#e53935' }}>
+              ● LIVE
+            </span>
+          )}
+
+          {user && !isBroadcaster && (
+            <ReportButton
+              streamId={id}
+              token={token}
+            />
+          )}
         </p>
 
         {isBroadcaster ? (
-          <BroadcasterView streamId={id} onEnd={() => router.push('/')} />
+          <BroadcasterView
+            streamId={id}
+            onEnd={() => router.push('/')}
+          />
         ) : (
           <ViewerPlayer streamId={id} />
         )}
 
         {/* Supporto token */}
         {user && !isBroadcaster && (
-          <div className="card" style={{ margin: '1rem 0' }}>
-            <strong>Supporta il creator 🪙</strong>
-            <p style={{ fontSize: 12, color: '#888', margin: '4px 0 8px' }}>
+          <div className="card" style={{
+            margin: '1rem 0'
+          }}>
+            <strong>
+              Supporta il creator 🪙
+            </strong>
+
+            <p style={{
+              fontSize: 12,
+              color: '#888',
+              margin: '4px 0 8px'
+            }}>
               Saldo: {balance} token
             </p>
-            <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
+
+            <div style={{
+              display: 'flex',
+              gap: '0.5rem',
+              flexWrap: 'wrap'
+            }}>
               {TIP_PRESETS.map(amount => (
                 <button
                   key={amount}
@@ -520,14 +937,28 @@ export default function StreamPage() {
                 </button>
               ))}
             </div>
+
             {tipError && (
-              <p className="error-text" style={{ fontSize: 12, margin: '4px 0 0' }}>
+              <p className="error-text" style={{
+                fontSize: 12,
+                margin: '4px 0 0'
+              }}>
                 {tipError}
               </p>
             )}
+
             {balance < 10 && (
-              <p style={{ fontSize: 12, color: '#666', marginTop: 6 }}>
-                <a href="/tokens" style={{ color: '#a78bfa' }}>Acquista token →</a>
+              <p style={{
+                fontSize: 12,
+                color: '#666',
+                marginTop: 6
+              }}>
+                <a
+                  href="/tokens"
+                  style={{ color: '#a78bfa' }}
+                >
+                  Acquista token →
+                </a>
               </p>
             )}
           </div>
@@ -537,19 +968,32 @@ export default function StreamPage() {
         <div className="chat-box">
           <div className="chat-messages">
             {messages.map(m => (
-              <div key={m.id} className={`msg${m.is_tip ? ' tip' : ''}`}>
+              <div
+                key={m.id}
+                className={`msg${m.is_tip ? ' tip' : ''}`}
+              >
                 {m.is_tip ? (
                   <span>
-                    🪙 <span className="username">{m.username}</span> {m.message}
+                    🪙{' '}
+                    <span className="username">
+                      {m.username}
+                    </span>{' '}
+                    {m.message}
                   </span>
                 ) : (
                   <>
-                    <span className="username">{m.username}: </span>
-                    <span>{m.message}</span>
+                    <span className="username">
+                      {m.username}:{' '}
+                    </span>
+
+                    <span>
+                      {m.message}
+                    </span>
                   </>
                 )}
               </div>
             ))}
+
             <div ref={messagesEndRef} />
           </div>
 
@@ -557,24 +1001,44 @@ export default function StreamPage() {
             <>
               {chatError && (
                 <p style={{
-                  padding: '0.4rem 0.75rem', fontSize: 12,
-                  color: '#e74c3c', background: '#1a0a0a', margin: 0
+                  padding: '0.4rem 0.75rem',
+                  fontSize: 12,
+                  color: '#e74c3c',
+                  background: '#1a0a0a',
+                  margin: 0
                 }}>
                   {chatError}
                 </p>
               )}
-              <form className="chat-input" onSubmit={sendMessage}>
+
+              <form
+                className="chat-input"
+                onSubmit={sendMessage}
+              >
                 <input
                   value={input}
                   onChange={e => setInput(e.target.value)}
                   placeholder="Scrivi un messaggio..."
                 />
-                <button type="submit">Invia</button>
+
+                <button type="submit">
+                  Invia
+                </button>
               </form>
             </>
           ) : (
-            <p style={{ padding: '0.5rem', fontSize: 13, color: '#666' }}>
-              <a href="/login" style={{ color: '#a78bfa' }}>Accedi</a> per partecipare alla chat.
+            <p style={{
+              padding: '0.5rem',
+              fontSize: 13,
+              color: '#666'
+            }}>
+              <a
+                href="/login"
+                style={{ color: '#a78bfa' }}
+              >
+                Accedi
+              </a>{' '}
+              per partecipare alla chat.
             </p>
           )}
         </div>
