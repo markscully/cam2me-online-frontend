@@ -9,11 +9,6 @@ import ReportButton from '../../components/ReportButton';
 
 const TIP_PRESETS = [10, 25, 50, 100];
 
-// Conserva le tracce tra le navigazioni interne di Cam2Me.
-// In questo modo webcam e microfono possono essere riutilizzati
-// quando il broadcaster rientra nella pagina.
-let retainedBroadcasterTracks = null;
-
 function isTrackLive(track) {
   return Boolean(
     track &&
@@ -24,7 +19,8 @@ function isTrackLive(track) {
 
 // Componente broadcaster LiveKit
 function BroadcasterView({ streamId, onEnd }) {
-  const [status, setStatus] = useState('connecting');
+  const [started, setStarted] = useState(false);
+  const [status, setStatus] = useState('idle');
   const [facingMode, setFacingMode] = useState('user');
   const [micMuted, setMicMuted] = useState(false);
   const [micNotice, setMicNotice] = useState('');
@@ -35,11 +31,14 @@ function BroadcasterView({ streamId, onEnd }) {
   const lkRoomRef = useRef(null);
 
   useEffect(() => {
+    if (!started) return;
+
     let cancelled = false;
     let localRoom = null;
 
     async function start() {
       try {
+        setStatus('connecting');
         setMicNotice('');
 
         const {
@@ -72,74 +71,31 @@ function BroadcasterView({ streamId, onEnd }) {
           return;
         }
 
-        const cachedVideo = Array.isArray(retainedBroadcasterTracks)
-          ? retainedBroadcasterTracks.find(t => t.kind === 'video' && isTrackLive(t))
-          : null;
-
-        const cachedAudio = Array.isArray(retainedBroadcasterTracks)
-          ? retainedBroadcasterTracks.find(t => t.kind === 'audio' && isTrackLive(t))
-          : null;
-
-        let videoTrack = cachedVideo || null;
-        if (!videoTrack) {
-          videoTrack = await createLocalVideoTrack({ facingMode: 'user' });
-        }
+        const videoTrack = await createLocalVideoTrack({ facingMode: 'user' });
+        const audioTrack = await createLocalAudioTrack();
 
         if (cancelled) {
+          videoTrack.stop();
+          audioTrack.stop();
           lkRoom.disconnect(false);
           return;
         }
 
         await lkRoom.localParticipant.publishTrack(videoTrack);
+        await lkRoom.localParticipant.publishTrack(audioTrack);
+        await audioTrack.unmute();
+
         currentVideoTrack.current = videoTrack;
+        currentAudioTrack.current = audioTrack;
 
         if (videoRef.current) {
           videoTrack.attach(videoRef.current);
         }
 
-        let audioTrack = cachedAudio || null;
-        if (!audioTrack) {
-          try {
-            audioTrack = await createLocalAudioTrack();
-          } catch (audioErr) {
-            console.warn('[LiveKit audio init]', audioErr);
-            if (!cancelled) {
-              setMicMuted(true);
-              setMicNotice(
-                audioErr?.name === 'NotAllowedError'
-                  ? 'Microfono non autorizzato: clicca sull’icona del microfono per attivarlo.'
-                  : 'Microfono in attesa: clicca l’icona 🎙️ per attivare l’audio.'
-              );
-            }
-          }
-        }
-
-        if (cancelled) {
-          lkRoom.disconnect(false);
-          return;
-        }
-
-        if (audioTrack && isTrackLive(audioTrack)) {
-          await lkRoom.localParticipant.publishTrack(audioTrack);
-          currentAudioTrack.current = audioTrack;
-          await audioTrack.unmute();
-          if (!cancelled) {
-            setMicMuted(false);
-            setMicNotice('');
-          }
-        } else if (!cancelled) {
-          setMicMuted(true);
-        }
-
-        retainedBroadcasterTracks = [
-          ...(videoTrack && isTrackLive(videoTrack) ? [videoTrack] : []),
-          ...(audioTrack && isTrackLive(audioTrack) ? [audioTrack] : [])
-        ];
-
         if (!cancelled) {
+          setMicMuted(false);
           setStatus('live');
         }
-
       } catch (err) {
         console.error('[LiveKit broadcaster]', err);
 
@@ -158,14 +114,26 @@ function BroadcasterView({ streamId, onEnd }) {
     return () => {
       cancelled = true;
 
-      // Disconnette la stanza LiveKit ma NON ferma le tracce.
-      // Se si rientra nella pagina, potranno essere riutilizzate.
+      if (currentVideoTrack.current) {
+        try {
+          currentVideoTrack.current.stop();
+        } catch (e) {}
+        currentVideoTrack.current = null;
+      }
+
+      if (currentAudioTrack.current) {
+        try {
+          currentAudioTrack.current.stop();
+        } catch (e) {}
+        currentAudioTrack.current = null;
+      }
+
       if (lkRoomRef.current) {
         lkRoomRef.current.disconnect(false);
         lkRoomRef.current = null;
       }
     };
-  }, [streamId]);
+  }, [streamId, started]);
 
   // Cambio fotocamera
   async function switchCamera() {
@@ -196,22 +164,13 @@ function BroadcasterView({ streamId, onEnd }) {
       }
 
       currentVideoTrack.current = newTrack;
-
-      // Aggiorna la cache con la nuova fotocamera.
-      if (Array.isArray(retainedBroadcasterTracks)) {
-        retainedBroadcasterTracks = retainedBroadcasterTracks.map(track =>
-          track.kind === 'video' ? newTrack : track
-        );
-      }
-
       setFacingMode(newFacing);
-
     } catch (err) {
       console.error('[switchCamera]', err);
     }
   }
 
-  // Attiva/disattiva microfono (e lo ricrea/pubblica se non ancora attivo).
+  // Attiva/disattiva microfono
   async function toggleMic() {
     try {
       setMicNotice('');
@@ -221,15 +180,6 @@ function BroadcasterView({ streamId, onEnd }) {
         const audioTrack = await createLocalAudioTrack();
 
         currentAudioTrack.current = audioTrack;
-
-        if (Array.isArray(retainedBroadcasterTracks)) {
-          retainedBroadcasterTracks = [
-            ...retainedBroadcasterTracks.filter(t => t.kind !== 'audio'),
-            audioTrack
-          ];
-        } else {
-          retainedBroadcasterTracks = [audioTrack];
-        }
 
         if (lkRoomRef.current) {
           await lkRoomRef.current.localParticipant.publishTrack(audioTrack);
@@ -258,7 +208,7 @@ function BroadcasterView({ streamId, onEnd }) {
     }
   }
 
-  // Termina definitivamente la diretta.
+  // Termina definitivamente la diretta
   async function handleEnd() {
     try {
       if (lkRoomRef.current) {
@@ -266,26 +216,27 @@ function BroadcasterView({ streamId, onEnd }) {
         lkRoomRef.current = null;
       }
 
-      // Rilascia webcam e microfono.
-      if (Array.isArray(retainedBroadcasterTracks)) {
-        retainedBroadcasterTracks.forEach(track => {
-          try {
-            track.stop();
-          } catch (err) {
-            console.warn('[track cleanup]', err);
-          }
-        });
+      if (currentVideoTrack.current) {
+        try {
+          currentVideoTrack.current.stop();
+        } catch (err) {
+          console.warn('[video cleanup]', err);
+        }
+        currentVideoTrack.current = null;
       }
 
-      retainedBroadcasterTracks = null;
-
-      currentVideoTrack.current = null;
-      currentAudioTrack.current = null;
+      if (currentAudioTrack.current) {
+        try {
+          currentAudioTrack.current.stop();
+        } catch (err) {
+          console.warn('[audio cleanup]', err);
+        }
+        currentAudioTrack.current = null;
+      }
 
       await api.endStream(streamId);
 
       onEnd();
-
     } catch (err) {
       console.error('[handleEnd]', err);
     }
@@ -297,6 +248,7 @@ function BroadcasterView({ streamId, onEnd }) {
         position: 'relative',
         width: '100%',
         maxWidth: 560,
+        minHeight: 280,
         margin: '0 auto',
         background: '#000',
         borderRadius: 8,
@@ -317,7 +269,35 @@ function BroadcasterView({ streamId, onEnd }) {
           }}
         />
 
-        {status === 'connecting' && (
+        {!started && (
+          <div style={{
+            position: 'absolute',
+            inset: 0,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            background: 'rgba(0,0,0,0.75)'
+          }}>
+            <button
+              type="button"
+              onClick={() => setStarted(true)}
+              style={{
+                background: '#e53935',
+                border: 'none',
+                color: '#fff',
+                borderRadius: 8,
+                padding: '12px 22px',
+                fontSize: 15,
+                fontWeight: 700,
+                cursor: 'pointer'
+              }}
+            >
+              Avvia diretta (Video + Audio)
+            </button>
+          </div>
+        )}
+
+        {started && status === 'connecting' && (
           <div style={{
             position: 'absolute',
             inset: 0,
@@ -332,7 +312,7 @@ function BroadcasterView({ streamId, onEnd }) {
           </div>
         )}
 
-        {status === 'error' && (
+        {started && status === 'error' && (
           <div style={{
             position: 'absolute',
             inset: 0,
@@ -350,7 +330,7 @@ function BroadcasterView({ streamId, onEnd }) {
           </div>
         )}
 
-        {status === 'live' && (
+        {started && status === 'live' && (
           <div style={{
             position: 'absolute',
             top: 10,
@@ -366,7 +346,7 @@ function BroadcasterView({ streamId, onEnd }) {
           </div>
         )}
 
-        {status === 'live' && (
+        {started && status === 'live' && (
           <div style={{
             position: 'absolute',
             bottom: 10,
@@ -512,7 +492,6 @@ function ViewerPlayer({ streamId }) {
         await lkRoom.connect(livekitUrl, token, {
           autoSubscribe: true
         });
-
       } catch (err) {
         console.error('[LiveKit viewer]', err);
 
@@ -550,7 +529,6 @@ function ViewerPlayer({ streamId }) {
 
     const video = videoRef.current;
 
-    // Eventi fullscreen video per dispositivi WebKit.
     if (video) {
       video.addEventListener('webkitbeginfullscreen', onFsChange);
       video.addEventListener('webkitendfullscreen', onFsChange);
@@ -603,26 +581,22 @@ function ViewerPlayer({ streamId }) {
         return;
       }
 
-      // API standard Chrome, Edge e browser moderni.
       if (el.requestFullscreen) {
         await el.requestFullscreen();
         return;
       }
 
-      // Fallback WebKit.
       if (el.webkitRequestFullscreen) {
         el.webkitRequestFullscreen();
         return;
       }
 
-      // Fallback per fullscreen del video su dispositivi mobili.
       if (video && video.webkitEnterFullscreen) {
         video.webkitEnterFullscreen();
         return;
       }
 
       console.warn('[fullscreen] API non supportata');
-
     } catch (err) {
       console.error('[fullscreen]', err);
     }
